@@ -9,3 +9,9 @@ venv/
 .pytest_cache/
 .mypy_cache/
 *.sqlite3
+
+# Mobile (Expo)
+mobile/node_modules/
+mobile/.expo/
+mobile/android/
+mobile/ios/
