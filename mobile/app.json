@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "台日比價 AI 顧問",
+    "slug": "tw-jp-price-comparison",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "twjpcompare",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.twjp.pricecomparison"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#C0392B"
+      },
+      "package": "com.twjp.pricecomparison"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允許存取相簿以上傳商品圖片",
+          "cameraPermission": "允許使用相機拍攝商品圖片"
+        }
+      ]
+    ],
+    "extra": {
+      "router": { "origin": false }
+    }
+  }
+}
