@@ -1,4 +1,5 @@
 import React from 'react';
+import { Linking } from 'react-native';
 import { render, fireEvent } from '@testing-library/react-native';
 import PlatformCard from '../../components/PlatformCard';
 import type { PriceListing } from '../../types/api';
@@ -51,10 +52,11 @@ describe('PlatformCard – Taiwan (TWD)', () => {
   });
 
   it('pressing "前往購買" calls Linking.openURL with the listing URL', () => {
-    const Linking = require('react-native/Libraries/Linking/Linking');
+    const spy = jest.spyOn(Linking, 'openURL').mockResolvedValueOnce(undefined);
     const { getByText } = render(<PlatformCard listing={twListing} market="TW" exchangeRate={RATE} />);
     fireEvent.press(getByText('前往購買'));
-    expect(Linking.openURL).toHaveBeenCalledWith(twListing.url);
+    expect(spy).toHaveBeenCalledWith(twListing.url);
+    spy.mockRestore();
   });
 });
 

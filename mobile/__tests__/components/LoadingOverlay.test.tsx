@@ -29,10 +29,16 @@ describe('LoadingOverlay', () => {
     expect(getByText('🤖')).toBeTruthy();
   });
 
-  it('covers the screen (absoluteFill overlay)', () => {
+  it('renders a semi-transparent dark overlay background', () => {
     const { toJSON } = render(<LoadingOverlay />);
     const tree = JSON.stringify(toJSON());
-    // The overlay style includes position:absolute which manifests as absoluteFill
-    expect(tree).toContain('absolute');
+    // The outermost view has a dark overlay colour
+    expect(tree).toContain('rgba(0,0,0,0.55)');
+  });
+
+  it('renders with a high zIndex to sit on top of content', () => {
+    const { toJSON } = render(<LoadingOverlay />);
+    const tree = JSON.stringify(toJSON());
+    expect(tree).toContain('"zIndex":999');
   });
 });

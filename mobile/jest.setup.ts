@@ -1,4 +1,4 @@
-import '@testing-library/react-native/extend-expect';
+// @testing-library/react-native v13+ auto-registers matchers — no extend-expect import needed
 import { UIManager } from 'react-native';
 
 UIManager.setLayoutAnimationEnabledExperimental = jest.fn();
@@ -44,8 +44,5 @@ jest.mock('expo-router', () => ({
 
 jest.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
-jest.mock('react-native/Libraries/Linking/Linking', () => ({
-  openURL:          jest.fn().mockResolvedValue(undefined),
-  canOpenURL:       jest.fn().mockResolvedValue(true),
-  addEventListener: jest.fn(),
-}));
+// Linking is tested via jest.spyOn(Linking, 'openURL') in PlatformCard.test.tsx
+// Avoid mocking the internal path here – it changed in React Native 0.85+.
