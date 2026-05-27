@@ -114,7 +114,7 @@ export default function SearchScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Hero gradient */}
-        <LinearGradient colors={['#7B241C', '#C0392B']} style={styles.hero}>
+        <LinearGradient colors={['#0F172A', '#1E293B']} style={styles.hero}>
           <Text style={styles.heroFlags}>🇹🇼  ↔  🇯🇵</Text>
           <Text style={styles.heroTitle}>台日比價 AI 顧問</Text>
           <Text style={styles.heroSub}>
@@ -291,7 +291,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   tab:           { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 10, gap: 6 },
-  tabActive:     { backgroundColor: '#FDECEA' },
+  tabActive:     { backgroundColor: Colors.primaryLight },
   tabLabel:      { fontSize: 14, color: Colors.textSecondary, fontWeight: '600' },
   tabLabelActive:{ color: Colors.primary },
 
