@@ -35,6 +35,9 @@
       "router": {
         "origin": false
       }
+    },
+    "experiments": {
+      "baseUrl": "/tw-jp-price-comparison"
     }
   }
 }
