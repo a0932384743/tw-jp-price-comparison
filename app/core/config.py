@@ -5,7 +5,7 @@ from functools import lru_cache
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    anthropic_api_key: str = ""
+    gemini_api_key: str = ""
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/twjp_prices"
     app_env: str = "development"
     app_port: int = 8000

@@ -22,6 +22,7 @@ import { searchByImage, searchByText } from '../lib/api';
 import { setLastResult } from '../lib/store';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { Colors } from '../constants/colors';
+import { hapticSelection, hapticImpact, hapticNotification } from '../lib/haptics';
 
 type Mode = 'text' | 'image';
 
@@ -46,7 +47,7 @@ export default function SearchScreen() {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      hapticNotification(Haptics.NotificationFeedbackType.Error);
     } finally {
       setLoading(false);
     }
@@ -55,7 +56,7 @@ export default function SearchScreen() {
   const handleTextSearch = () =>
     runSearch(async () => {
       if (!query.trim()) return;
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      hapticImpact(Haptics.ImpactFeedbackStyle.Medium);
       const result = await searchByText(query.trim());
       setLastResult(result);
       router.push('/results');
@@ -64,7 +65,7 @@ export default function SearchScreen() {
   const handleImageSearch = () =>
     runSearch(async () => {
       if (!imageUri) return;
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      hapticImpact(Haptics.ImpactFeedbackStyle.Medium);
       const result = await searchByImage(imageUri, imageMime);
       setLastResult(result);
       router.push('/results');
@@ -94,7 +95,7 @@ export default function SearchScreen() {
   };
 
   const switchMode = (m: Mode) => {
-    Haptics.selectionAsync();
+    hapticSelection();
     setMode(m);
     setError(null);
   };
@@ -182,7 +183,7 @@ export default function SearchScreen() {
                 <TouchableOpacity
                   key={ex}
                   style={styles.chip}
-                  onPress={() => { setQuery(ex); Haptics.selectionAsync(); }}
+                  onPress={() => { setQuery(ex); hapticSelection(); }}
                 >
                   <Text style={styles.chipText}>{ex}</Text>
                 </TouchableOpacity>

@@ -28,10 +28,13 @@
           "photosPermission": "允許存取相簿以上傳商品圖片",
           "cameraPermission": "允許使用相機拍攝商品圖片"
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "extra": {
-      "router": { "origin": false }
+      "router": {
+        "origin": false
+      }
     }
   }
 }

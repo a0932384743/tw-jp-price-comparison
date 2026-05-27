@@ -13,6 +13,7 @@ from datetime import date
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
+from tenacity import RetryError
 
 from app.core.db import get_session
 from app.models.database import PriceCache, SearchHistory
@@ -96,16 +97,23 @@ async def search(
         )
 
     # ── Step 1: AI keyword mapping ──────────────────────────────────────────
-    if image:
-        image_bytes = await image.read()
-        media_type = image.content_type or "image/jpeg"
-        mapping = await analyze_input("image", image_bytes, media_type=media_type)
-        raw_query = None
-        image_filename = image.filename
-    else:
-        mapping = await analyze_input("text", query)
-        raw_query = query
-        image_filename = None
+    try:
+        if image:
+            image_bytes = await image.read()
+            media_type = image.content_type or "image/jpeg"
+            mapping = await analyze_input("image", image_bytes, media_type=media_type)
+            raw_query = None
+            image_filename = image.filename
+        else:
+            mapping = await analyze_input("text", query)
+            raw_query = query
+            image_filename = None
+    except RetryError as e:
+        last_exc = e.last_attempt.exception()
+        raise HTTPException(status_code=429, detail=f"AI服務暫時無法使用: {last_exc}")
+    except RuntimeError as e:
+        # Gemini API quota exceeded or other AI error
+        raise HTTPException(status_code=429, detail=str(e))
 
     # ── Step 2: Concurrent price fetching (with DB cache) ──────────────────
     try:

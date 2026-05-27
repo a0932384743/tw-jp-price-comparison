@@ -1,16 +1,17 @@
 """
-AI Advisor – cross-market purchasing analysis powered by Claude.
+AI Advisor – cross-market purchasing analysis powered by Google Gemini.
 
 Takes aggregated price data from both markets, applies the exchange rate and
-Japan's 10 % tax-free refund, then asks Claude to produce a structured
-buying recommendation via forced tool-use (guaranteed parseable output).
+Japan's 10 % tax-free refund, then asks Gemini to produce a structured
+buying recommendation via JSON output.
 """
 from __future__ import annotations
 
 import logging
 import statistics
+import json
 
-import anthropic
+import google.generativeai as genai
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
@@ -18,67 +19,25 @@ from app.schemas.product import BuyingAdvice, PriceListing, ProsCons
 
 logger = logging.getLogger(__name__)
 
-_ADVICE_TOOL: dict = {
-    "name": "return_buying_advice",
-    "description": "Return a structured cross-market purchasing analysis.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "price_comparison_summary": {
-                "type": "string",
-                "description": (
-                    "2-3 sentence narrative comparing TW and JP prices, "
-                    "mentioning the converted JPY prices in TWD."
-                ),
-            },
-            "best_deal_location": {
-                "type": "string",
-                "enum": ["Taiwan", "Japan", "Similar"],
-                "description": "Which market offers the better overall deal.",
-            },
-            "pros_cons": {
-                "type": "object",
-                "properties": {
-                    "pros": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Advantages of buying in the best-deal location.",
-                    },
-                    "cons": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Disadvantages or caveats.",
-                    },
-                },
-                "required": ["pros", "cons"],
-            },
-            "verdict": {
-                "type": "string",
-                "description": (
-                    "One actionable recommendation sentence. E.g. "
-                    "'Buy on momo – you save ~NT$600 vs Japan after shipping.' "
-                    "or 'Buy in Japan for ~15% savings if you can tax-free shop.'"
-                ),
-            },
-        },
-        "required": [
-            "price_comparison_summary",
-            "best_deal_location",
-            "pros_cons",
-            "verdict",
-        ],
-    },
+_SYSTEM_PROMPT = """You are a savvy cross-border shopping advisor for Taiwanese consumers.
+You always respond in Traditional Chinese.
+Given price data from Taiwan and Japan, you calculate the real cost including
+Japan's 10% consumption-tax refund for foreign visitors shopping in physical stores,
+and you advise where the consumer will get the best deal.
+Be concise, practical, and specific about savings amounts.
+
+You must respond with a valid JSON object with this exact structure:
+{
+  "price_comparison_summary": "2-3 sentence narrative comparing TW and JP prices",
+  "best_deal_location": "Taiwan" or "Japan" or "Similar",
+  "pros_cons": {
+    "pros": ["advantage 1", "advantage 2"],
+    "cons": ["disadvantage 1", "disadvantage 2"]
+  },
+  "verdict": "One actionable recommendation sentence"
 }
 
-_SYSTEM_PROMPT = (
-    "You are a savvy cross-border shopping advisor for Taiwanese consumers. "
-    "You always respond in Traditional Chinese. "
-    "Given price data from Taiwan and Japan, you calculate the real cost including "
-    "Japan's 10% consumption-tax refund for foreign visitors shopping in physical stores, "
-    "and you advise where the consumer will get the best deal. "
-    "Be concise, practical, and specific about savings amounts. "
-    "Always call the `return_buying_advice` tool with your result."
-)
+Always return valid JSON only, no additional text."""
 
 
 def _average_price(listings: list[PriceListing]) -> float | None:
@@ -121,7 +80,7 @@ def _build_prompt(
 - 日本購買需加計國際運費（約 NT$300–800 / 件）或親自帶回的行李費用。
 - 台灣商品享有本地保固，日本商品可能需要平行輸入報修。
 
-請呼叫 `return_buying_advice` 工具，給出具體、精確的建議。
+請給出具體、精確的建議，並以 JSON 格式回傳。
 """.strip()
 
 
@@ -149,39 +108,47 @@ async def generate_buying_advice(
     jp_avg_twd = jp_avg_jpy * rate if jp_avg_jpy is not None else None
     jp_tax_free_twd = jp_avg_twd * (1 - settings.jp_tax_free_rate) if jp_avg_twd is not None else None
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    genai.configure(api_key=settings.gemini_api_key)
+    model = genai.GenerativeModel(
+        model_name="gemini-pro",
+        generation_config={
+            "temperature": 0.3,
+            "top_p": 0.9,
+            "top_k": 40,
+            "max_output_tokens": 1024,
+        },
+    )
 
-    prompt = _build_prompt(
+    prompt = _SYSTEM_PROMPT + "\n\n" + _build_prompt(
         tw_prices, jp_prices, rate, settings.jp_tax_free_rate,
         tw_avg, jp_avg_jpy, jp_avg_twd, jp_tax_free_twd,
     )
 
-    response = await client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        system=_SYSTEM_PROMPT,
-        tools=[_ADVICE_TOOL],
-        tool_choice={"type": "tool", "name": "return_buying_advice"},
-        messages=[{"role": "user", "content": prompt}],
-    )
+    response = await model.generate_content_async(prompt)
 
-    tool_use_block = next(
-        (block for block in response.content if block.type == "tool_use"),
-        None,
-    )
-    if tool_use_block is None:
-        raise RuntimeError("Claude did not return a tool_use block as expected.")
+    # Parse JSON response
+    try:
+        result_text = response.text.strip()
+        # Remove markdown code blocks if present
+        if result_text.startswith("```"):
+            result_text = result_text.split("```")[1]
+            if result_text.startswith("json"):
+                result_text = result_text[4:]
+            result_text = result_text.strip()
 
-    raw = tool_use_block.input
-    advice = BuyingAdvice(
-        price_comparison_summary=raw["price_comparison_summary"],
-        best_deal_location=raw["best_deal_location"],
-        tw_average_price_twd=tw_avg,
-        jp_average_price_twd=jp_avg_twd,
-        jp_tax_free_price_twd=jp_tax_free_twd,
-        pros_cons=ProsCons(**raw["pros_cons"]),
-        verdict=raw["verdict"],
-    )
+        raw = json.loads(result_text)
+        advice = BuyingAdvice(
+            price_comparison_summary=raw["price_comparison_summary"],
+            best_deal_location=raw["best_deal_location"],
+            tw_average_price_twd=tw_avg,
+            jp_average_price_twd=jp_avg_twd,
+            jp_tax_free_price_twd=jp_tax_free_twd,
+            pros_cons=ProsCons(**raw["pros_cons"]),
+            verdict=raw["verdict"],
+        )
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.error("Failed to parse Gemini response: %s", response.text)
+        raise RuntimeError(f"Gemini returned invalid JSON: {e}") from e
 
     logger.info("Advice generated: best_deal=%s", advice.best_deal_location)
     return advice, rate

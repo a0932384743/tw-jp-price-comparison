@@ -14,7 +14,7 @@
 ┌─────────────────────────────────────────────────────────┐
 │  POST /api/search                                       │
 │                                                         │
-│  1. AI Agent (Claude)                                   │
+│  1. AI Agent (Google Gemini)                            │
 │     └─ 視覺辨識 / 語意分析                               │
 │        → 台灣關鍵字、日本關鍵字、商品分類                 │
 │                                                         │
@@ -24,7 +24,7 @@
 │         fetch_tw_prices()  ─┐                           │
 │         fetch_jp_prices()  ─┘  asyncio.gather           │
 │                                                         │
-│  3. AI 顧問 (Claude)                                    │
+│  3. AI 顧問 (Google Gemini)                             │
 │     └─ 匯率換算 + 日本退稅 10%                           │
 │        → 比價摘要、最佳地點、優缺點、結論                 │
 │                                                         │
@@ -40,7 +40,7 @@
 | 層級 | 技術 |
 |---|---|
 | **後端框架** | Python 3.10+ / FastAPI (非同步) |
-| **AI 核心** | Anthropic Claude Sonnet（視覺辨識、多語關鍵字映射、購買建議） |
+| **AI 核心** | Google Gemini 1.5 Flash（視覺辨識、多語關鍵字映射、購買建議） |
 | **爬蟲結構** | httpx + BeautifulSoup（開發期使用 Mock 資料） |
 | **資料庫** | PostgreSQL + SQLAlchemy 2 Async + Alembic |
 | **資料驗證** | Pydantic v2 |
@@ -65,9 +65,9 @@ tw-jp-price-comparison/
 │   ├── api/
 │   │   └── routes.py          # POST /api/search
 │   ├── services/
-│   │   ├── ai_agent.py        # Claude 商品識別 & 關鍵字映射
+│   │   ├── ai_agent.py        # Gemini 商品識別 & 關鍵字映射
 │   │   ├── scraper.py         # 台日電商爬蟲（含 Mock 層）
-│   │   └── advisor.py         # Claude 購買建議生成
+│   │   └── advisor.py         # Gemini 購買建議生成
 │   ├── models/
 │   │   └── database.py        # ORM：SearchHistory、PriceCache
 │   └── schemas/
@@ -91,9 +91,12 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 # 填入以下必要值：
-# ANTHROPIC_API_KEY=sk-ant-...
-# DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/twjp_prices
+# GEMINI_API_KEY=your-gemini-api-key-here
+# DATABASE_URL=postgresql+asyncpg://postgres:123456@localhost:5432/twjp_prices
 ```
+
+> **取得 Gemini API Key：**  
+> 前往 [Google AI Studio](https://aistudio.google.com/app/apikey) 免費取得 API Key
 
 ### 3. 資料庫初始化（需有 PostgreSQL）
 
@@ -204,7 +207,7 @@ pytest tests/ -v --asyncio-mode=auto
 
 | 變數 | 預設值 | 說明 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | **必填**，Anthropic API 金鑰 |
+| `GEMINI_API_KEY` | — | **必填**，Google Gemini API 金鑰 |
 | `DATABASE_URL` | — | PostgreSQL 連線字串 |
 | `APP_ENV` | `development` | `development` 使用 Mock 資料；`production` 啟動真實爬蟲 |
 | `APP_PORT` | `8000` | 伺服器埠號 |
