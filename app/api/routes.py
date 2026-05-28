@@ -20,6 +20,7 @@ from app.models.database import PriceCache, SearchHistory
 from app.schemas.product import SearchResponse
 from app.services.advisor import generate_buying_advice
 from app.services.ai_agent import analyze_input
+from app.services.exchange_rate import get_jpy_to_twd_rate
 from app.services.scraper import fetch_jp_prices, fetch_tw_prices
 
 logger = logging.getLogger(__name__)
@@ -115,8 +116,10 @@ async def search(
         # Gemini API quota exceeded or other AI error
         raise HTTPException(status_code=429, detail=str(e))
 
-    # ── Step 2: Concurrent price fetching (with DB cache) ──────────────────
+    # ── Step 2: Live exchange rate + concurrent price fetching ─────────────
     try:
+        live_rate = await get_jpy_to_twd_rate()
+
         async with get_session() as session:
             cached_tw = await _get_cached_prices(mapping.refined_tw_keyword, "TW", session)
             cached_jp = await _get_cached_prices(mapping.refined_jp_keyword, "JP", session)
@@ -132,7 +135,7 @@ async def search(
                 logger.info("Cache hit for TW=%s / JP=%s", mapping.refined_tw_keyword, mapping.refined_jp_keyword)
 
             # ── Step 3: AI buying advice ────────────────────────────────────
-            advice, rate = await generate_buying_advice(tw_prices, jp_prices)
+            advice, rate = await generate_buying_advice(tw_prices, jp_prices, current_exchange_rate=live_rate)
 
             # ── Persist search history + cache ──────────────────────────────
             history = SearchHistory(
