@@ -35,6 +35,22 @@ _UA = (
 _HEADERS_TW = {"User-Agent": _UA, "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8"}
 _HEADERS_JP = {"User-Agent": _UA, "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"}
 
+# ── Price outlier filter ─────────────────────────────────────────────────────
+
+def _filter_outliers(listings: list[PriceListing], min_ratio: float = 0.35) -> list[PriceListing]:
+    """Remove listings whose price is far below the group median.
+
+    Accessories and unrelated products tend to be much cheaper than the
+    actual searched item. Keeping only items >= median * min_ratio removes
+    the most obvious outliers while preserving genuine price variation.
+    """
+    if len(listings) <= 1:
+        return listings
+    prices = sorted(l.price for l in listings)
+    median = prices[len(prices) // 2]
+    return [l for l in listings if l.price >= median * min_ratio]
+
+
 # ── Mock helpers (development only) ─────────────────────────────────────────
 
 def _seed_from(keyword: str) -> int:
@@ -81,14 +97,14 @@ async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceL
     """PChome 24h JSON search API – no authentication required."""
     url = (
         f"https://ecshweb.pchome.com.tw/search/v3.3/all/results"
-        f"?q={quote(keyword)}&page=1&sort=sale/dc"
+        f"?q={quote(keyword)}&page=1&sort=rnk/dc"
     )
     try:
         resp = await client.get(url, headers=_HEADERS_TW, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         results: list[PriceListing] = []
-        for prod in data.get("Prods", [])[:5]:
+        for prod in data.get("Prods", [])[:8]:
             name = prod.get("Name", "").strip()
             price = prod.get("Price", {}).get("P") or prod.get("Price", {}).get("M")
             prod_id = prod.get("Id", "")
@@ -100,6 +116,7 @@ async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceL
                     currency="TWD",
                     url=f"https://24h.pchome.com.tw/prod/{prod_id}",
                 ))
+        results = _filter_outliers(results)[:5]
         logger.info("PChome: %d results for '%s'", len(results), keyword)
         return results
     except Exception as exc:
@@ -118,7 +135,7 @@ async def _scrape_momo(client: httpx.AsyncClient, keyword: str) -> list[PriceLis
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         results: list[PriceListing] = []
-        for card in soup.select("li.goodsItem")[:5]:
+        for card in soup.select("li.goodsItem")[:8]:
             title_el = card.select_one(".prdName")
             price_el = card.select_one(".price b")
             link_el = card.select_one("a")
@@ -137,6 +154,7 @@ async def _scrape_momo(client: httpx.AsyncClient, keyword: str) -> list[PriceLis
                 ))
             except (ValueError, AttributeError):
                 continue
+        results = _filter_outliers(results)[:5]
         logger.info("momo: %d results for '%s'", len(results), keyword)
         return results
     except Exception as exc:
@@ -148,13 +166,13 @@ async def _scrape_momo(client: httpx.AsyncClient, keyword: str) -> list[PriceLis
 
 async def _scrape_rakuten_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
     """楽天市場 HTML search."""
-    url = f"https://search.rakuten.co.jp/search/mall/{quote(keyword)}/?s=2"
+    url = f"https://search.rakuten.co.jp/search/mall/{quote(keyword)}/"
     try:
         resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         results: list[PriceListing] = []
-        for card in soup.select("div.searchresultitem")[:5]:
+        for card in soup.select("div.searchresultitem")[:8]:
             title_el = (
                 card.select_one(".content.title a")
                 or card.select_one("a.title")
@@ -180,6 +198,7 @@ async def _scrape_rakuten_jp(client: httpx.AsyncClient, keyword: str) -> list[Pr
                 ))
             except (ValueError, AttributeError):
                 continue
+        results = _filter_outliers(results)[:5]
         logger.info("Rakuten: %d results for '%s'", len(results), keyword)
         return results
     except Exception as exc:
