@@ -1,56 +1,37 @@
-"""Async SQLAlchemy session factory and lifespan helper."""
+"""Firebase Firestore client initialization."""
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+import json
+import logging
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+import firebase_admin
+from firebase_admin import credentials, firestore as fs
 
-from app.core.config import get_settings
-from app.models.database import Base
+logger = logging.getLogger(__name__)
 
-_engine = None
-_session_factory = None
-
-
-def _get_engine():
-    global _engine
-    if _engine is None:
-        settings = get_settings()
-        _engine = create_async_engine(
-            settings.database_url,
-            echo=settings.app_env == "development",
-            pool_pre_ping=True,
-        )
-    return _engine
+_client: fs.Client | None = None
 
 
-def _get_session_factory():
-    global _session_factory
-    if _session_factory is None:
-        _session_factory = async_sessionmaker(
-            _get_engine(), expire_on_commit=False, class_=AsyncSession
-        )
-    return _session_factory
+def init_firebase(service_account_json: str) -> None:
+    global _client
+    if firebase_admin._apps:
+        _client = fs.client()
+        return
+    try:
+        cred = credentials.Certificate(json.loads(service_account_json))
+        firebase_admin.initialize_app(cred)
+        _client = fs.client()
+        logger.info("Firebase Firestore initialized.")
+    except Exception as exc:
+        logger.error("Firebase init failed: %s", exc)
+        raise
 
 
-async def create_tables() -> None:
-    """Create all tables (dev convenience – use Alembic in production)."""
-    async with _get_engine().begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+def get_db() -> fs.Client:
+    if _client is None:
+        raise RuntimeError("Firebase not initialized.")
+    return _client
 
 
-async def drop_tables() -> None:
-    async with _get_engine().begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-
-
-@asynccontextmanager
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    async with _get_session_factory()() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
+def is_available() -> bool:
+    return _client is not None

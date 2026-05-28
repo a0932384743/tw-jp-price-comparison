@@ -6,13 +6,12 @@ from __future__ import annotations
 
 import logging
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 
 from app.api.routes import router
 from app.core.config import get_settings
-from app.core.db import create_tables
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,14 +24,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("Starting up in %s mode", settings.app_env)
-    if settings.app_env == "development":
-        # Auto-create tables for local dev convenience.
-        # In production, use Alembic migrations instead.
-        try:
-            await create_tables()
-            logger.info("Database tables ensured.")
-        except Exception as exc:
-            logger.warning("DB init skipped (no DB configured?): %s", exc)
+
+    if settings.firebase_service_account_json:
+        from app.core.db import init_firebase
+        init_firebase(settings.firebase_service_account_json)
+    else:
+        logger.warning(
+            "FIREBASE_SERVICE_ACCOUNT_JSON not set – search history and price cache disabled."
+        )
+
     yield
     logger.info("Shutting down.")
 
@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],        # Tighten in production
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -64,7 +64,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["System"])
     async def health():
-        return {"status": "ok", "env": settings.app_env}
+        from app.core.db import is_available
+        return {
+            "status": "ok",
+            "env": settings.app_env,
+            "firebase": is_available(),
+        }
 
     return app
 

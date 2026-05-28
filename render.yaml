@@ -8,20 +8,13 @@ services:
     envVars:
       - key: GEMINI_API_KEY
         sync: false
-      - key: DATABASE_URL
-        fromDatabase:
-          name: tw-jp-prices-db
-          property: connectionString
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        value: adjoined-b367d
       - key: APP_ENV
         value: production
       - key: JPY_TO_TWD_RATE
         value: "0.218"
       - key: SCRAPER_REQUEST_DELAY
         value: "1.5"
-
-databases:
-  - name: tw-jp-prices-db
-    plan: free
-    region: singapore
-    databaseName: twjp_prices
-    user: twjp_user

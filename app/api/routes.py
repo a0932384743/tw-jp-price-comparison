@@ -8,16 +8,16 @@ POST /api/search
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import date
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import JSONResponse
+from firebase_admin import firestore as fs
 from tenacity import RetryError
 
-from app.core.db import get_session
-from app.models.database import PriceCache, SearchHistory
-from app.schemas.product import SearchResponse
+from app.core.db import get_db, is_available
+from app.schemas.product import PriceListing, SearchResponse
 from app.services.advisor import generate_buying_advice
 from app.services.ai_agent import analyze_input
 from app.services.exchange_rate import get_jpy_to_twd_rate
@@ -27,49 +27,93 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
-async def _get_cached_prices(keyword: str, market: str, session) -> list | None:
-    """Return today's cached listings or None if cache is cold."""
-    from sqlalchemy import select
-    from app.schemas.product import PriceListing
+# ── Firestore helpers ────────────────────────────────────────────────────────
 
-    result = await session.execute(
-        select(PriceCache).where(
-            PriceCache.keyword == keyword,
-            PriceCache.market == market,
-            PriceCache.cache_date == date.today(),
-        )
-    )
-    rows = result.scalars().all()
-    if not rows:
+def _cache_doc_id(keyword: str, market: str) -> str:
+    """Stable Firestore document ID for a (keyword, market, date) triple."""
+    raw = f"{keyword}|{market}|{date.today()}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+async def _get_cached_prices(keyword: str, market: str) -> list[PriceListing] | None:
+    if not is_available():
         return None
-    return [
-        PriceListing(
-            platform=r.platform,
-            title=r.title,
-            price=r.price,
-            currency=r.currency,
-            url=r.url,
-        )
-        for r in rows
-    ]
+
+    cache_id = _cache_doc_id(keyword, market)
+
+    def _query():
+        doc = get_db().collection("price_cache").document(cache_id).get()
+        if doc.exists:
+            data = doc.to_dict()
+            if data.get("cache_date") == str(date.today()):
+                return data.get("listings", [])
+        return None
+
+    raw = await asyncio.to_thread(_query)
+    if raw is None:
+        return None
+    return [PriceListing(**item) for item in raw]
 
 
-async def _save_cache(keyword: str, market: str, listings, search_id, session) -> None:
-    for listing in listings:
-        session.add(
-            PriceCache(
-                search_id=search_id,
-                keyword=keyword,
-                market=market,
-                platform=listing.platform,
-                title=listing.title,
-                price=listing.price,
-                currency=listing.currency,
-                url=listing.url,
-                cache_date=date.today(),
-            )
-        )
+async def _persist(
+    *,
+    input_type: str,
+    raw_query: str | None,
+    image_filename: str | None,
+    mapping,
+    rate: float,
+    advice,
+    tw_prices: list[PriceListing],
+    jp_prices: list[PriceListing],
+    tw_was_cached: bool,
+    jp_was_cached: bool,
+) -> None:
+    if not is_available():
+        return
 
+    def _write():
+        db = get_db()
+
+        # search_history document
+        search_ref = db.collection("search_history").document()
+        search_ref.set({
+            "created_at": fs.SERVER_TIMESTAMP,
+            "input_type": input_type,
+            "raw_query": raw_query,
+            "image_filename": image_filename,
+            "refined_tw_keyword": mapping.refined_tw_keyword,
+            "refined_jp_keyword": mapping.refined_jp_keyword,
+            "category": mapping.category,
+            "exchange_rate_jpy_twd": rate,
+            "best_deal_location": advice.best_deal_location,
+            "verdict": advice.verdict,
+        })
+
+        # price_cache – only write if we fetched fresh data
+        if not tw_was_cached:
+            tw_id = _cache_doc_id(mapping.refined_tw_keyword, "TW")
+            db.collection("price_cache").document(tw_id).set({
+                "keyword": mapping.refined_tw_keyword,
+                "market": "TW",
+                "cache_date": str(date.today()),
+                "search_id": search_ref.id,
+                "listings": [l.model_dump() for l in tw_prices],
+            })
+
+        if not jp_was_cached:
+            jp_id = _cache_doc_id(mapping.refined_jp_keyword, "JP")
+            db.collection("price_cache").document(jp_id).set({
+                "keyword": mapping.refined_jp_keyword,
+                "market": "JP",
+                "cache_date": str(date.today()),
+                "search_id": search_ref.id,
+                "listings": [l.model_dump() for l in jp_prices],
+            })
+
+    await asyncio.to_thread(_write)
+
+
+# ── Search endpoint ──────────────────────────────────────────────────────────
 
 @router.post(
     "/search",
@@ -80,17 +124,6 @@ async def search(
     query: str | None = Form(default=None, description="Product name or description"),
     image: UploadFile | None = File(default=None, description="Product image (jpg/png/webp)"),
 ):
-    """
-    ## End-to-end search flow
-
-    1. **AI Agent** identifies the product from text or image and returns
-       optimised search keywords for both TW and JP markets.
-    2. **Scrapers** fetch live (or cached) prices from momo/Shopee and Amazon
-       JP/Rakuten concurrently.
-    3. **AI Advisor** analyses the price data against the current exchange rate
-       and Japan's 10% tax-free refund to produce a structured recommendation.
-    """
-    # ── Validate input ──────────────────────────────────────────────────────
     if not query and not image:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -113,50 +146,50 @@ async def search(
         last_exc = e.last_attempt.exception()
         raise HTTPException(status_code=429, detail=f"AI服務暫時無法使用: {last_exc}")
     except RuntimeError as e:
-        # Gemini API quota exceeded or other AI error
         raise HTTPException(status_code=429, detail=str(e))
 
-    # ── Step 2: Live exchange rate + concurrent price fetching ─────────────
+    # ── Step 2: Live exchange rate + price fetching (with Firestore cache) ──
     try:
-        live_rate = await get_jpy_to_twd_rate()
+        live_rate, cached_tw, cached_jp = await asyncio.gather(
+            get_jpy_to_twd_rate(),
+            _get_cached_prices(mapping.refined_tw_keyword, "TW"),
+            _get_cached_prices(mapping.refined_jp_keyword, "JP"),
+        )
 
-        async with get_session() as session:
-            cached_tw = await _get_cached_prices(mapping.refined_tw_keyword, "TW", session)
-            cached_jp = await _get_cached_prices(mapping.refined_jp_keyword, "JP", session)
+        tw_was_cached = cached_tw is not None
+        jp_was_cached = cached_jp is not None
 
-            if cached_tw is None or cached_jp is None:
-                tw_prices, jp_prices = await asyncio.gather(
-                    fetch_tw_prices(mapping.refined_tw_keyword),
-                    fetch_jp_prices(mapping.refined_jp_keyword),
-                )
-            else:
-                tw_prices = cached_tw
-                jp_prices = cached_jp
-                logger.info("Cache hit for TW=%s / JP=%s", mapping.refined_tw_keyword, mapping.refined_jp_keyword)
-
-            # ── Step 3: AI buying advice ────────────────────────────────────
-            advice, rate = await generate_buying_advice(tw_prices, jp_prices, current_exchange_rate=live_rate)
-
-            # ── Persist search history + cache ──────────────────────────────
-            history = SearchHistory(
-                input_type="image" if image else "text",
-                raw_query=raw_query,
-                image_filename=image_filename,
-                refined_tw_keyword=mapping.refined_tw_keyword,
-                refined_jp_keyword=mapping.refined_jp_keyword,
-                category=mapping.category,
-                exchange_rate_jpy_twd=rate,
-                best_deal_location=advice.best_deal_location,
-                verdict=advice.verdict,
+        if tw_was_cached and jp_was_cached:
+            tw_prices, jp_prices = cached_tw, cached_jp
+            logger.info("Firestore cache hit: TW=%s / JP=%s",
+                        mapping.refined_tw_keyword, mapping.refined_jp_keyword)
+        else:
+            tw_prices, jp_prices = await asyncio.gather(
+                fetch_tw_prices(mapping.refined_tw_keyword),
+                fetch_jp_prices(mapping.refined_jp_keyword),
             )
-            session.add(history)
-            await session.flush()  # populate history.id before FK references
 
-            if cached_tw is None:
-                await _save_cache(mapping.refined_tw_keyword, "TW", tw_prices, history.id, session)
-            if cached_jp is None:
-                await _save_cache(mapping.refined_jp_keyword, "JP", jp_prices, history.id, session)
+        # ── Step 3: AI buying advice ────────────────────────────────────────
+        advice, rate = await generate_buying_advice(
+            tw_prices, jp_prices, current_exchange_rate=live_rate
+        )
 
+        # ── Step 4: Persist to Firestore (fire-and-forget) ──────────────────
+        asyncio.create_task(_persist(
+            input_type="image" if image else "text",
+            raw_query=raw_query,
+            image_filename=image_filename,
+            mapping=mapping,
+            rate=rate,
+            advice=advice,
+            tw_prices=tw_prices,
+            jp_prices=jp_prices,
+            tw_was_cached=tw_was_cached,
+            jp_was_cached=jp_was_cached,
+        ))
+
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Pipeline error: %s", exc)
         raise HTTPException(

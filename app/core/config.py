@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,19 +7,15 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     gemini_api_key: str = ""
-    database_url: str = "postgresql+asyncpg://user:password@localhost:5432/twjp_prices"
+
+    # Firebase Admin SDK – paste the full service account JSON as one line
+    firebase_service_account_json: str = ""
+    firebase_project_id: str = "adjoined-b367d"
+
     app_env: str = "development"
     app_port: int = 8000
 
-    @model_validator(mode="after")
-    def _fix_database_url(self) -> "Settings":
-        # Render (and many PaaS) provide postgresql:// — asyncpg needs postgresql+asyncpg://
-        url = self.database_url
-        if url.startswith("postgresql://") and "+asyncpg" not in url:
-            self.database_url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return self
-
-    # Exchange rate used when no live source is configured
+    # Exchange rate used when live fetch fails
     jpy_to_twd_rate: float = 0.218
 
     # Politeness delay between scraper HTTP requests (seconds)
