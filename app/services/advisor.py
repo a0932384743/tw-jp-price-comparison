@@ -52,6 +52,10 @@ def _average_price(listings: list[PriceListing]) -> float | None:
     return statistics.mean(prices) if prices else None
 
 
+def _fmt(value: float | None, prefix: str = "", suffix: str = "") -> str:
+    return f"{prefix}{value:,.0f}{suffix}" if value is not None else "(無資料)"
+
+
 def _build_prompt(
     tw_listings: list[PriceListing],
     jp_listings: list[PriceListing],
@@ -75,12 +79,12 @@ def _build_prompt(
 
 【台灣商品價格 (TWD)】
 {tw_block or '  (無資料)'}
-台灣平均價: NT${tw_avg:,.0f} if tw_avg else '(無資料)'
+台灣平均價: {_fmt(tw_avg, "NT$")}
 
 【日本商品價格 (JPY → TWD，匯率 1 JPY = {rate} TWD)】
 {jp_block or '  (無資料)'}
-日本平均價 (含稅): ¥{jp_avg_jpy:,.0f} ≈ NT${jp_avg_twd:,.0f} if jp_avg_jpy else '(無資料)'
-日本平均價 (退稅 {int(tax_free_rate * 100)}%): ≈ NT${jp_tax_free_twd:,.0f} if jp_tax_free_twd else '(無資料)'
+日本平均價 (含稅): {_fmt(jp_avg_jpy, "¥")} ≈ {_fmt(jp_avg_twd, "NT$")}
+日本平均價 (退稅 {int(tax_free_rate * 100)}%): {_fmt(jp_tax_free_twd, "≈ NT$")}
 
 注意事項：
 - 退稅優惠僅適用於在日本實體門市購買，線上購買無法退稅。
