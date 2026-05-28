@@ -1,0 +1,86 @@
+name: Daily Price Cache Warm-up
+
+on:
+  schedule:
+    # 00:30 UTC = 08:30 Taiwan time, before peak usage
+    - cron: '30 0 * * *'
+  workflow_dispatch:
+    inputs:
+      extra_product:
+        description: 'Extra product to pre-cache (optional)'
+        required: false
+        default: ''
+
+jobs:
+  warm-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Wake up Render service
+        run: |
+          echo "Waking up Render free-tier service..."
+          for i in 1 2 3; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              --max-time 30 \
+              https://tw-jp-price-api.onrender.com/health)
+            echo "Health check attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Service is up."
+              break
+            fi
+            echo "Waiting 20s for cold start..."
+            sleep 20
+          done
+
+      - name: Pre-cache popular products
+        run: |
+          API="https://tw-jp-price-api.onrender.com/api/search"
+
+          # Popular products across major categories
+          PRODUCTS=(
+            "Nintendo Switch OLED 主機"
+            "iPhone 16 Pro Max"
+            "Sony WH-1000XM5 無線降噪耳機"
+            "AirPods Pro 第二代"
+            "資生堂 SHISEIDO 極上御藏精華液"
+            "SK-II 神仙水 護膚精華"
+            "SK-II Facial Treatment Essence"
+            "Canon EOS R50 相機"
+            "Dyson V15 Detect 吸塵器"
+            "任天堂 Nintendo Switch OLED"
+            "PS5 PlayStation 5 主機"
+            "Apple Watch Series 10"
+            "iPad Pro M4"
+            "Kindle Paperwhite"
+            "UNIQLO 搖粒絨外套"
+          )
+
+          SUCCESS=0
+          FAIL=0
+
+          for PRODUCT in "${PRODUCTS[@]}"; do
+            echo "Pre-caching: $PRODUCT"
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST "$API" \
+              -F "query=$PRODUCT" \
+              --max-time 90)
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "  ✓ OK ($HTTP_CODE)"
+              SUCCESS=$((SUCCESS + 1))
+            else
+              echo "  ✗ Failed ($HTTP_CODE)"
+              FAIL=$((FAIL + 1))
+            fi
+            # Small delay to avoid hammering the API
+            sleep 8
+          done
+
+          # Extra product from workflow_dispatch input
+          if [ -n "${{ github.event.inputs.extra_product }}" ]; then
+            PRODUCT="${{ github.event.inputs.extra_product }}"
+            echo "Pre-caching extra: $PRODUCT"
+            curl -s -o /dev/null -X POST "$API" -F "query=$PRODUCT" --max-time 90
+          fi
+
+          echo "Cache warm-up complete: $SUCCESS succeeded, $FAIL failed"

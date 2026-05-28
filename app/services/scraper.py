@@ -162,6 +162,88 @@ async def _scrape_momo(client: httpx.AsyncClient, keyword: str) -> list[PriceLis
         return []
 
 
+# ── Taiwan extra scrapers ────────────────────────────────────────────────────
+
+async def _scrape_shopee_tw(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """蝦皮購物 (Shopee TW) semi-public search API."""
+    url = (
+        f"https://shopee.tw/api/v4/search/search_items"
+        f"?by=relevancy&keyword={quote(keyword)}&limit=8&newest=0"
+        f"&order=desc&page_type=search&scenario=PAGE_GLOBAL_SEARCH&version=2"
+    )
+    try:
+        resp = await client.get(url, headers={
+            **_HEADERS_TW,
+            "Accept": "application/json",
+            "Referer": f"https://shopee.tw/search?keyword={quote(keyword)}",
+            "X-API-SOURCE": "pc",
+            "X-Requested-With": "XMLHttpRequest",
+        }, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        items = data.get("items") or data.get("data", {}).get("items", [])
+        for entry in items[:8]:
+            item = entry.get("item_basic") or entry
+            name = (item.get("name") or "").strip()
+            # Shopee prices are in "cents" (TWD * 100000)
+            price_raw = item.get("price") or item.get("price_min") or 0
+            price = float(price_raw) / 100000 if price_raw > 100000 else float(price_raw)
+            item_id = item.get("itemid") or item.get("item_id", "")
+            shop_id = item.get("shopid") or item.get("shop_id", "")
+            if name and price > 1:
+                results.append(PriceListing(
+                    platform="蝦皮購物",
+                    title=name,
+                    price=price,
+                    currency="TWD",
+                    url=f"https://shopee.tw/product/{shop_id}/{item_id}",
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("Shopee TW: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("Shopee TW scrape failed for '%s': %s", keyword, exc)
+        return []
+
+
+async def _scrape_yahoo_tw(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """Yahoo購物中心 (Taiwan) HTML search."""
+    url = f"https://tw.buy.yahoo.com/search/product?p={quote(keyword)}&sort=pop"
+    try:
+        resp = await client.get(url, headers=_HEADERS_TW, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results: list[PriceListing] = []
+        for card in soup.select("li.LoopGrid-item, li[class*='GridProduct']")[:8]:
+            title_el = card.select_one("p.Ell, h3, [class*='title']")
+            price_el = card.select_one("[class*='price'], [class*='Price']")
+            link_el = card.select_one("a[href]")
+            if not (title_el and price_el):
+                continue
+            try:
+                price_raw = "".join(c for c in price_el.text if c.isdigit())
+                if not price_raw:
+                    continue
+                href = link_el.get("href", "") if link_el else ""
+                full_url = href if href.startswith("http") else f"https://tw.buy.yahoo.com{href}"
+                results.append(PriceListing(
+                    platform="Yahoo購物中心",
+                    title=title_el.text.strip(),
+                    price=float(price_raw),
+                    currency="TWD",
+                    url=full_url,
+                ))
+            except (ValueError, AttributeError):
+                continue
+        results = _filter_outliers(results)[:5]
+        logger.info("Yahoo TW: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("Yahoo TW scrape failed for '%s': %s", keyword, exc)
+        return []
+
+
 # ── Japan live scrapers ──────────────────────────────────────────────────────
 
 async def _scrape_rakuten_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
@@ -285,6 +367,83 @@ async def _scrape_yahoo_shopping_jp(client: httpx.AsyncClient, keyword: str) -> 
         return []
 
 
+async def _scrape_amazon_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """Amazon Japan HTML search – uses CloudFront CDN, less aggressively blocked."""
+    url = f"https://www.amazon.co.jp/s?k={quote(keyword)}&language=ja_JP"
+    try:
+        resp = await client.get(url, headers={
+            **_HEADERS_JP,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results: list[PriceListing] = []
+        for card in soup.select('div[data-component-type="s-search-result"]')[:8]:
+            title_el = card.select_one("h2 span.a-text-normal, h2 span")
+            price_whole = card.select_one("span.a-price-whole")
+            link_el = card.select_one("h2 a.a-link-normal")
+            if not (title_el and price_whole):
+                continue
+            try:
+                price_raw = "".join(c for c in price_whole.text if c.isdigit())
+                if not price_raw:
+                    continue
+                href = link_el.get("href", "") if link_el else ""
+                full_url = f"https://www.amazon.co.jp{href}" if href.startswith("/") else href
+                results.append(PriceListing(
+                    platform="Amazon Japan",
+                    title=title_el.text.strip(),
+                    price=float(price_raw),
+                    currency="JPY",
+                    url=full_url,
+                ))
+            except (ValueError, AttributeError):
+                continue
+        results = _filter_outliers(results)[:5]
+        logger.info("Amazon JP: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("Amazon JP scrape failed for '%s': %s", keyword, exc)
+        return []
+
+
+async def _scrape_kakaku_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """価格.com (Kakaku) – Japan's largest price comparison site."""
+    url = f"https://kakaku.com/search_results/{quote(keyword)}/?category=&stype=0&tab=product"
+    try:
+        resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results: list[PriceListing] = []
+        for card in soup.select("li.ckitanker, div.ckitanker, li[class*='Product']")[:8]:
+            title_el = card.select_one("p.ckitanker_name a, .p-item_name a, h2 a, a.p-item_name")
+            price_el = card.select_one("span.priceTxt, .p-item_price strong, [class*='price']")
+            link_el = title_el if title_el else card.select_one("a[href]")
+            if not (title_el and price_el):
+                continue
+            try:
+                price_raw = "".join(c for c in price_el.text if c.isdigit())
+                if not price_raw:
+                    continue
+                href = link_el.get("href", "") if link_el else ""
+                full_url = href if href.startswith("http") else f"https://kakaku.com{href}"
+                results.append(PriceListing(
+                    platform="価格.com",
+                    title=title_el.text.strip(),
+                    price=float(price_raw),
+                    currency="JPY",
+                    url=full_url,
+                ))
+            except (ValueError, AttributeError):
+                continue
+        results = _filter_outliers(results)[:5]
+        logger.info("Kakaku JP: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("Kakaku JP scrape failed for '%s': %s", keyword, exc)
+        return []
+
+
 # ── Gemini Search fallback (used when all scrapers return 0 results) ─────────
 
 async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceListing]:
@@ -299,24 +458,34 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
 
     if market == "TW":
         prompt = (
-            f'Search Google Shopping for the current retail price of "{keyword}" '
-            f"in Taiwan (台灣). Look at results from PChome 24h, momo購物網, "
-            f"Yahoo購物中心, and Shopee台灣.\n\n"
+            f'Search Google Shopping and Google Search for the current retail price of '
+            f'"{keyword}" in Taiwan (台灣).\n'
+            f"Check these platforms: PChome 24h (24h.pchome.com.tw), momo購物網 (momoshop.com.tw), "
+            f"蝦皮購物/Shopee (shopee.tw), Yahoo購物中心 (tw.buy.yahoo.com), "
+            f"燦坤 (tkec.com.tw), 博客來 (books.com.tw).\n\n"
+            f"IMPORTANT: Only include results for the exact product \"{keyword}\", "
+            f"not accessories or unrelated items. Prices must be in TWD and realistic "
+            f"(e.g. Nintendo Switch ~9,000–13,000 TWD, iPhone ~30,000–40,000 TWD).\n\n"
             f"Return ONLY a valid JSON array (no markdown, no explanation):\n"
-            f'[{{"platform":"PChome 24h","title":"full product name","price":9490,'
-            f'"currency":"TWD","url":"https://24h.pchome.com.tw/..."}}]\n\n'
-            f"Include 3-5 results with real current market prices in TWD."
+            f'[{{"platform":"PChome 24h","title":"exact full product name","price":9490,'
+            f'"currency":"TWD","url":"https://24h.pchome.com.tw/prod/PRODID"}}]\n\n'
+            f"Include 4-6 results from different stores with accurate current prices in TWD."
         )
         currency = "TWD"
     else:
         prompt = (
-            f'Search Google Shopping for the current retail price of "{keyword}" '
-            f"in Japan (日本). Look at results from 楽天市場, Yahoo!ショッピング, "
-            f"Amazon.co.jp, and ヨドバシカメラ.\n\n"
+            f'Search Google Shopping and Google Search for the current retail price of '
+            f'"{keyword}" in Japan (日本).\n'
+            f"Check these platforms: 楽天市場 (rakuten.co.jp), Yahoo!ショッピング (shopping.yahoo.co.jp), "
+            f"Amazon.co.jp, ヨドバシカメラ (yodobashi.com), ビックカメラ (biccamera.com), "
+            f"価格.com (kakaku.com).\n\n"
+            f"IMPORTANT: Only include results for the exact product \"{keyword}\", "
+            f"not accessories. Prices must be in JPY and realistic "
+            f"(e.g. Nintendo Switch OLED ~36,000–42,000 JPY, iPhone ~150,000–180,000 JPY).\n\n"
             f"Return ONLY a valid JSON array (no markdown, no explanation):\n"
-            f'[{{"platform":"楽天市場","title":"full product name","price":37980,'
-            f'"currency":"JPY","url":"https://search.rakuten.co.jp/..."}}]\n\n'
-            f"Include 3-5 results with real current market prices in JPY."
+            f'[{{"platform":"楽天市場","title":"exact full product name","price":37980,'
+            f'"currency":"JPY","url":"https://search.rakuten.co.jp/search/mall/..."}}]\n\n'
+            f"Include 4-6 results from different stores with accurate current prices in JPY."
         )
         currency = "JPY"
 
@@ -370,7 +539,7 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
 # ── Public API ───────────────────────────────────────────────────────────────
 
 async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
-    """Return Taiwan listings – PChome API + momo, with Gemini fallback."""
+    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW, with Gemini fallback."""
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock TW prices for '%s'", keyword)
@@ -378,11 +547,13 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
         return _mock_tw_prices(keyword)
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        pchome_results, momo_results = await asyncio.gather(
+        results_per_source = await asyncio.gather(
             _scrape_pchome(client, keyword),
             _scrape_momo(client, keyword),
+            _scrape_shopee_tw(client, keyword),
+            _scrape_yahoo_tw(client, keyword),
         )
-    combined = pchome_results + momo_results
+    combined = [r for src in results_per_source for r in src]
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
@@ -394,7 +565,7 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
 
 
 async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
-    """Return Japan listings – Rakuten + Yahoo Shopping, with Gemini fallback."""
+    """Return Japan listings – Rakuten + Yahoo + Amazon + Kakaku, with Gemini fallback."""
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock JP prices for '%s'", keyword)
@@ -402,11 +573,13 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         return _mock_jp_prices(keyword)
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        rakuten_results, yahoo_results = await asyncio.gather(
+        results_per_source = await asyncio.gather(
             _scrape_rakuten_jp(client, keyword),
             _scrape_yahoo_shopping_jp(client, keyword),
+            _scrape_amazon_jp(client, keyword),
+            _scrape_kakaku_jp(client, keyword),
         )
-    combined = rakuten_results + yahoo_results
+    combined = [r for src in results_per_source for r in src]
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
