@@ -43,7 +43,7 @@ jobs:
         run: npx expo export --platform web
         env:
           EXPO_NO_TELEMETRY: '1'
-          EXPO_PUBLIC_API_URL: ${{ secrets.API_URL }}
+          EXPO_PUBLIC_API_URL: https://tw-jp-price-api.onrender.com
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
