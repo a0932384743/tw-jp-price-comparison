@@ -26,6 +26,14 @@ FALLBACK_MODELS: list[str] = [
     "gemini-2.5-flash",
 ]
 
+# Models known to support Google Search grounding (try in order)
+_GROUNDING_MODELS: list[str] = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
+
 
 async def generate_with_fallback(
     api_key: str,
@@ -65,3 +73,43 @@ async def generate_with_fallback(
     raise RuntimeError(
         "所有 Gemini 模型配額已用盡，請稍後再試。"
     ) from last_quota_exc
+
+
+async def search_with_grounding(api_key: str, prompt: str) -> str | None:
+    """Call Gemini with Google Search grounding enabled.
+
+    Uses google_search_retrieval so Gemini queries Google live and grounds
+    its answer in real search results — bypassing cloud-IP blocks on retail sites.
+
+    Returns the raw text response, or None if all attempts fail.
+    """
+    genai.configure(api_key=api_key)
+
+    try:
+        search_tool = genai.protos.Tool(
+            google_search_retrieval=genai.protos.GoogleSearchRetrieval()
+        )
+    except AttributeError:
+        logger.warning("google_search_retrieval not available in this API version")
+        return None
+
+    for model_name in _GROUNDING_MODELS:
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                tools=[search_tool],
+                generation_config={"temperature": 0.1, "max_output_tokens": 2048},
+            )
+            response = await model.generate_content_async(prompt)
+            logger.info("Grounded search success with model: %s", model_name)
+            return response.text
+        except google.api_core.exceptions.ResourceExhausted:
+            continue
+        except google.api_core.exceptions.InvalidArgument as exc:
+            logger.debug("Model %s does not support grounding: %s", model_name, exc)
+            continue
+        except Exception as exc:
+            logger.warning("Grounded search failed with %s: %s", model_name, exc)
+            continue
+
+    return None

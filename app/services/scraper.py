@@ -285,10 +285,92 @@ async def _scrape_yahoo_shopping_jp(client: httpx.AsyncClient, keyword: str) -> 
         return []
 
 
+# ── Gemini Search fallback (used when all scrapers return 0 results) ─────────
+
+async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceListing]:
+    """Use Gemini + Google Search grounding to find live prices when scrapers fail.
+
+    First tries grounded search (real-time Google results).
+    Falls back to Gemini AI knowledge if grounding is unavailable.
+    """
+    from app.services.gemini_client import generate_with_fallback, search_with_grounding
+
+    settings = get_settings()
+
+    if market == "TW":
+        prompt = (
+            f'Search Google Shopping for the current retail price of "{keyword}" '
+            f"in Taiwan (台灣). Look at results from PChome 24h, momo購物網, "
+            f"Yahoo購物中心, and Shopee台灣.\n\n"
+            f"Return ONLY a valid JSON array (no markdown, no explanation):\n"
+            f'[{{"platform":"PChome 24h","title":"full product name","price":9490,'
+            f'"currency":"TWD","url":"https://24h.pchome.com.tw/..."}}]\n\n'
+            f"Include 3-5 results with real current market prices in TWD."
+        )
+        currency = "TWD"
+    else:
+        prompt = (
+            f'Search Google Shopping for the current retail price of "{keyword}" '
+            f"in Japan (日本). Look at results from 楽天市場, Yahoo!ショッピング, "
+            f"Amazon.co.jp, and ヨドバシカメラ.\n\n"
+            f"Return ONLY a valid JSON array (no markdown, no explanation):\n"
+            f'[{{"platform":"楽天市場","title":"full product name","price":37980,'
+            f'"currency":"JPY","url":"https://search.rakuten.co.jp/..."}}]\n\n'
+            f"Include 3-5 results with real current market prices in JPY."
+        )
+        currency = "JPY"
+
+    # Try grounded search first (live Google results)
+    text = await search_with_grounding(settings.gemini_api_key, prompt)
+
+    # Fall back to AI knowledge if grounding unavailable
+    if not text:
+        logger.info("Grounding unavailable, using Gemini AI knowledge for '%s' (%s)", keyword, market)
+        try:
+            response, _ = await generate_with_fallback(
+                api_key=settings.gemini_api_key,
+                contents=prompt,
+                generation_config={"temperature": 0.1, "max_output_tokens": 1024},
+            )
+            text = response.text
+        except Exception as exc:
+            logger.warning("Gemini AI price fallback also failed for '%s': %s", keyword, exc)
+            return []
+
+    # Parse JSON from response text
+    try:
+        clean = text.strip()
+        if "```json" in clean:
+            clean = clean.split("```json")[1].split("```")[0].strip()
+        elif "```" in clean:
+            clean = clean.split("```")[1].split("```")[0].strip()
+        start, end = clean.find("["), clean.rfind("]") + 1
+        if start < 0 or end <= start:
+            raise ValueError("No JSON array found in response")
+        items = json.loads(clean[start:end])
+        results = []
+        for item in items:
+            price = float(item.get("price", 0))
+            title = str(item.get("title", "")).strip()
+            if price > 0 and title:
+                results.append(PriceListing(
+                    platform=str(item.get("platform", "電商平台")),
+                    title=title,
+                    price=price,
+                    currency=str(item.get("currency", currency)),
+                    url=str(item.get("url", "")),
+                ))
+        logger.info("Gemini fallback (%s): %d results for '%s'", market, len(results), keyword)
+        return results
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Failed to parse Gemini price response for '%s': %s | text: %.200s", keyword, exc, text)
+        return []
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
 async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
-    """Return Taiwan listings – PChome API + momo, concurrently."""
+    """Return Taiwan listings – PChome API + momo, with Gemini fallback."""
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock TW prices for '%s'", keyword)
@@ -302,12 +384,17 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
         )
     combined = pchome_results + momo_results
     await asyncio.sleep(settings.scraper_request_delay)
+
+    if not combined:
+        logger.warning("All TW scrapers failed for '%s', falling back to Gemini Search", keyword)
+        combined = await _fallback_prices_via_gemini(keyword, "TW")
+
     logger.info("TW total: %d listings for '%s'", len(combined), keyword)
     return combined
 
 
 async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
-    """Return Japan listings – Rakuten + Yahoo Shopping, concurrently."""
+    """Return Japan listings – Rakuten + Yahoo Shopping, with Gemini fallback."""
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock JP prices for '%s'", keyword)
@@ -321,5 +408,10 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         )
     combined = rakuten_results + yahoo_results
     await asyncio.sleep(settings.scraper_request_delay)
+
+    if not combined:
+        logger.warning("All JP scrapers failed for '%s', falling back to Gemini Search", keyword)
+        combined = await _fallback_prices_via_gemini(keyword, "JP")
+
     logger.info("JP total: %d listings for '%s'", len(combined), keyword)
     return combined
