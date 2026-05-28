@@ -57,9 +57,8 @@ async def analyze_input(
     settings = get_settings()
     genai.configure(api_key=settings.gemini_api_key)
 
-    # Use models/gemini-2.5-pro (latest stable multimodal model)
     model = genai.GenerativeModel(
-        model_name="models/gemini-2.5-pro",
+        model_name="gemini-3.1-flash-lite",
         generation_config={
             "temperature": 0.2,
             "top_p": 0.95,

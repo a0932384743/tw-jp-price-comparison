@@ -110,7 +110,7 @@ async def generate_buying_advice(
 
     genai.configure(api_key=settings.gemini_api_key)
     model = genai.GenerativeModel(
-        model_name="gemini-pro",
+        model_name="gemini-3.1-flash-lite",
         generation_config={
             "temperature": 0.3,
             "top_p": 0.9,
