@@ -10,12 +10,11 @@ import json
 import logging
 from typing import Union
 
-import google.generativeai as genai
-import google.api_core.exceptions
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.schemas.product import KeywordMapping
+from app.services.gemini_client import generate_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +36,15 @@ Examples:
 
 Always return valid JSON only, no additional text."""
 
+_GENERATION_CONFIG = {
+    "temperature": 0.2,
+    "top_p": 0.95,
+    "top_k": 64,
+    "max_output_tokens": 4096,
+}
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def analyze_input(
     input_type: str,
     data: Union[str, bytes],
@@ -55,41 +61,29 @@ async def analyze_input(
         A :class:`KeywordMapping` with TW keyword, JP keyword, and category.
     """
     settings = get_settings()
-    genai.configure(api_key=settings.gemini_api_key)
-
-    model = genai.GenerativeModel(
-        model_name="gemini-3.1-flash-lite",
-        generation_config={
-            "temperature": 0.2,
-            "top_p": 0.95,
-            "top_k": 64,
-            "max_output_tokens": 4096,  # 建議根據實際需求設置，65536 太大容易超額
-        },
-    )
 
     if input_type == "text":
         if not isinstance(data, str):
             data = data.decode("utf-8")
-        prompt = f"{_SYSTEM_PROMPT}\n\nProduct query: {data}"
-        response = await model.generate_content_async(prompt)
+        contents = f"{_SYSTEM_PROMPT}\n\nProduct query: {data}"
     elif input_type == "image":
         if isinstance(data, str):
             data = data.encode("utf-8")
-
-        # Gemini expects image as PIL Image or dict with inline_data
-        import PIL.Image
         import io
+        import PIL.Image
         image = PIL.Image.open(io.BytesIO(data))
-
-        prompt = f"{_SYSTEM_PROMPT}\n\nPlease identify this product and return the JSON."
-        response = await model.generate_content_async([prompt, image])
+        contents = [f"{_SYSTEM_PROMPT}\n\nPlease identify this product and return the JSON.", image]
     else:
         raise ValueError(f"Unsupported input_type '{input_type}'. Use 'text' or 'image'.")
 
-    # Parse JSON response
+    response, model_used = await generate_with_fallback(
+        api_key=settings.gemini_api_key,
+        contents=contents,
+        generation_config=_GENERATION_CONFIG,
+    )
+
     try:
         result_text = response.text.strip()
-        # Remove markdown code blocks if present
         if result_text.startswith("```"):
             result_text = result_text.split("```")[1]
             if result_text.startswith("json"):
@@ -98,15 +92,13 @@ async def analyze_input(
 
         result = json.loads(result_text)
         mapping = KeywordMapping(**result)
-    except google.api_core.exceptions.ResourceExhausted as e:
-        logger.error("Gemini API quota exceeded: %s", str(e))
-        raise RuntimeError("Gemini API 配額已用盡，請稍後再試或升級帳號。\n詳情請見 https://ai.google.dev/gemini-api/docs/rate-limits") from e
     except (json.JSONDecodeError, ValueError) as e:
-        logger.error("Failed to parse Gemini response: %s", response.text)
+        logger.error("Failed to parse Gemini response (model=%s): %s", model_used, response.text)
         raise RuntimeError(f"Gemini returned invalid JSON: {e}") from e
 
     logger.info(
-        "Keyword mapping resolved: TW=%s | JP=%s | category=%s",
+        "Keyword mapping resolved via %s: TW=%s | JP=%s | category=%s",
+        model_used,
         mapping.refined_tw_keyword,
         mapping.refined_jp_keyword,
         mapping.category,

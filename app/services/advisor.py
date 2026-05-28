@@ -7,15 +7,15 @@ buying recommendation via JSON output.
 """
 from __future__ import annotations
 
+import json
 import logging
 import statistics
-import json
 
-import google.generativeai as genai
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.schemas.product import BuyingAdvice, PriceListing, ProsCons
+from app.services.gemini_client import generate_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,13 @@ You must respond with a valid JSON object with this exact structure:
 }
 
 Always return valid JSON only, no additional text."""
+
+_GENERATION_CONFIG = {
+    "temperature": 0.3,
+    "top_p": 0.9,
+    "top_k": 40,
+    "max_output_tokens": 1024,
+}
 
 
 def _average_price(listings: list[PriceListing]) -> float | None:
@@ -84,7 +91,7 @@ def _build_prompt(
 """.strip()
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def generate_buying_advice(
     tw_prices: list[PriceListing],
     jp_prices: list[PriceListing],
@@ -108,28 +115,19 @@ async def generate_buying_advice(
     jp_avg_twd = jp_avg_jpy * rate if jp_avg_jpy is not None else None
     jp_tax_free_twd = jp_avg_twd * (1 - settings.jp_tax_free_rate) if jp_avg_twd is not None else None
 
-    genai.configure(api_key=settings.gemini_api_key)
-    model = genai.GenerativeModel(
-        model_name="gemini-3.1-flash-lite",
-        generation_config={
-            "temperature": 0.3,
-            "top_p": 0.9,
-            "top_k": 40,
-            "max_output_tokens": 1024,
-        },
-    )
-
     prompt = _SYSTEM_PROMPT + "\n\n" + _build_prompt(
         tw_prices, jp_prices, rate, settings.jp_tax_free_rate,
         tw_avg, jp_avg_jpy, jp_avg_twd, jp_tax_free_twd,
     )
 
-    response = await model.generate_content_async(prompt)
+    response, model_used = await generate_with_fallback(
+        api_key=settings.gemini_api_key,
+        contents=prompt,
+        generation_config=_GENERATION_CONFIG,
+    )
 
-    # Parse JSON response
     try:
         result_text = response.text.strip()
-        # Remove markdown code blocks if present
         if result_text.startswith("```"):
             result_text = result_text.split("```")[1]
             if result_text.startswith("json"):
@@ -147,8 +145,8 @@ async def generate_buying_advice(
             verdict=raw["verdict"],
         )
     except (json.JSONDecodeError, KeyError, ValueError) as e:
-        logger.error("Failed to parse Gemini response: %s", response.text)
+        logger.error("Failed to parse Gemini response (model=%s): %s", model_used, response.text)
         raise RuntimeError(f"Gemini returned invalid JSON: {e}") from e
 
-    logger.info("Advice generated: best_deal=%s", advice.best_deal_location)
+    logger.info("Advice generated via %s: best_deal=%s", model_used, advice.best_deal_location)
     return advice, rate
