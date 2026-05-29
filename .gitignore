@@ -10,6 +10,9 @@ venv/
 .mypy_cache/
 *.sqlite3
 
+# Claude Code
+.claude/
+
 # Mobile (Expo)
 mobile/node_modules/
 mobile/.expo/
