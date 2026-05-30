@@ -1,11 +1,5 @@
 import React from 'react';
-import {
-  Linking,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import type { PriceListing } from '../types/api';
@@ -14,53 +8,66 @@ interface Props {
   listing: PriceListing;
   market: 'TW' | 'JP';
   exchangeRate: number;
+  isCheapest?: boolean;
 }
 
 const PLATFORM_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-  'momo購物網':         'storefront',
-  '蝦皮購物 (Shopee TW)': 'cart',
-  'PChome 24h':        'cube',
-  'Amazon Japan':      'logo-amazon',
-  '楽天市場 (Rakuten)': 'gift',
-  'Yahoo!ショッピング':  'pricetag',
+  'momo購物網':          'storefront',
+  '蝦皮購物':            'cart',
+  'PChome 24h':         'cube',
+  'Yahoo購物中心':       'storefront-outline',
+  '燦坤':               'flash',
+  '博客來':             'book',
+  'Amazon Japan':       'logo-amazon',
+  '楽天市場':           'gift',
+  'Yahoo!ショッピング': 'pricetag',
+  '価格.com':           'bar-chart',
+  'ヨドバシカメラ':     'camera',
+  'ビックカメラ':       'camera-outline',
 };
 
-function formatTWD(n: number) {
-  return `NT$${Math.round(n).toLocaleString('zh-TW')}`;
-}
-function formatJPY(n: number) {
-  return `¥${Math.round(n).toLocaleString('ja-JP')}`;
-}
+function fmtTWD(n: number) { return `NT$${Math.round(n).toLocaleString('zh-TW')}`; }
+function fmtJPY(n: number) { return `¥${Math.round(n).toLocaleString('ja-JP')}`; }
 
-export default function PlatformCard({ listing, market, exchangeRate }: Props) {
-  const iconName = PLATFORM_ICONS[listing.platform] ?? 'cart-outline';
+export default function PlatformCard({ listing, market, exchangeRate, isCheapest }: Props) {
+  const iconName    = PLATFORM_ICONS[listing.platform] ?? 'cart-outline';
   const accentColor = market === 'TW' ? Colors.tw : Colors.jp;
 
-  const jpConvertedTWD = market === 'JP' ? listing.price * exchangeRate : null;
-  const jpTaxFree      = jpConvertedTWD !== null ? jpConvertedTWD * 0.9 : null;
+  const jpTWD     = market === 'JP' ? listing.price * exchangeRate : null;
+  const jpTaxFree = jpTWD != null ? jpTWD * 0.9 : null;
+
+  const openLink = () => {
+    if (listing.url) Linking.openURL(listing.url).catch(() => {});
+  };
 
   return (
     <View style={styles.card}>
       {/* Platform header */}
       <View style={[styles.header, { backgroundColor: accentColor }]}>
-        <Ionicons name={iconName} size={14} color="#fff" />
+        <Ionicons name={iconName} size={13} color="#fff" />
         <Text style={styles.platform} numberOfLines={1}>{listing.platform}</Text>
+        {isCheapest && (
+          <View style={styles.cheapestBadge}>
+            <Text style={styles.cheapestText}>最低價 🏅</Text>
+          </View>
+        )}
       </View>
 
       {/* Body */}
       <View style={styles.body}>
         <Text style={styles.title} numberOfLines={2}>{listing.title}</Text>
 
-        <View style={styles.priceRow}>
+        <View style={styles.priceBlock}>
           <Text style={[styles.price, { color: accentColor }]}>
-            {market === 'TW' ? formatTWD(listing.price) : formatJPY(listing.price)}
+            {market === 'TW' ? fmtTWD(listing.price) : fmtJPY(listing.price)}
           </Text>
-          {market === 'JP' && jpConvertedTWD !== null && (
+          {market === 'JP' && jpTWD != null && (
             <View style={styles.converted}>
-              <Text style={styles.convertedLabel}>≈ {formatTWD(jpConvertedTWD)}</Text>
-              {jpTaxFree !== null && (
+              <Text style={styles.convertedLabel}>≈ {fmtTWD(jpTWD)}</Text>
+              {jpTaxFree != null && (
                 <View style={styles.taxBadge}>
-                  <Text style={styles.taxText}>退稅後 {formatTWD(jpTaxFree)}</Text>
+                  <Ionicons name="receipt-outline" size={11} color={Colors.gold} />
+                  <Text style={styles.taxText}>退稅後 {fmtTWD(jpTaxFree)}</Text>
                 </View>
               )}
             </View>
@@ -69,7 +76,7 @@ export default function PlatformCard({ listing, market, exchangeRate }: Props) {
 
         <TouchableOpacity
           style={[styles.linkBtn, { borderColor: accentColor }]}
-          onPress={() => Linking.openURL(listing.url)}
+          onPress={openLink}
           activeOpacity={0.7}
         >
           <Text style={[styles.linkText, { color: accentColor }]}>前往購買</Text>
@@ -83,45 +90,38 @@ export default function PlatformCard({ listing, market, exchangeRate }: Props) {
 const styles = StyleSheet.create({
   card: {
     backgroundColor: Colors.card,
-    borderRadius: 12,
-    marginBottom: 10,
+    borderRadius: 14,
     overflow: 'hidden',
-    shadowColor: Colors.shadow,
+    shadowColor: Colors.shadowMd,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
-    shadowRadius: 6,
+    shadowRadius: 8,
     elevation: 3,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 7,
     gap: 6,
   },
-  platform: { fontSize: 12, color: '#fff', fontWeight: '600', flex: 1 },
-  body:     { padding: 12 },
-  title:    { fontSize: 14, color: Colors.text, lineHeight: 20, marginBottom: 8 },
-  priceRow: { marginBottom: 10 },
-  price:    { fontSize: 22, fontWeight: '800' },
-  converted:    { marginTop: 4, gap: 4 },
+  platform:      { fontSize: 12, color: '#fff', fontWeight: '600', flex: 1 },
+  cheapestBadge: { backgroundColor: 'rgba(255,255,255,0.22)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
+  cheapestText:  { fontSize: 11, color: '#fff', fontWeight: '700' },
+
+  body:  { padding: 13 },
+  title: { fontSize: 13, color: Colors.text, lineHeight: 19, marginBottom: 10 },
+
+  priceBlock:     { marginBottom: 12 },
+  price:          { fontSize: 24, fontWeight: '900' },
+  converted:      { marginTop: 5, gap: 5 },
   convertedLabel: { fontSize: 13, color: Colors.textSecondary },
-  taxBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: Colors.goldLight,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  taxText: { fontSize: 12, color: Colors.gold, fontWeight: '600' },
+  taxBadge:       { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', backgroundColor: Colors.goldLight, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, gap: 4 },
+  taxText:        { fontSize: 12, color: Colors.gold, fontWeight: '600' },
+
   linkBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderRadius: 8,
-    paddingVertical: 8,
-    gap: 4,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderRadius: 8, paddingVertical: 8, gap: 4,
   },
   linkText: { fontSize: 13, fontWeight: '700' },
 });

@@ -444,6 +444,41 @@ async def _scrape_kakaku_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
         return []
 
 
+# ── Platform search URL lookup ───────────────────────────────────────────────
+
+_PLATFORM_SEARCH_URLS: dict[str, str] = {
+    "pchome":          "https://24h.pchome.com.tw/search/?q={kw}",
+    "momo":            "https://www.momoshop.com.tw/search/searchShop.jsp?keyword={kw}",
+    "蝦皮":            "https://shopee.tw/search?keyword={kw}",
+    "shopee":          "https://shopee.tw/search?keyword={kw}",
+    "yahoo購物":       "https://tw.buy.yahoo.com/search/product?p={kw}",
+    "燦坤":            "https://www.tkec.com.tw/search.aspx?q={kw}",
+    "博客來":          "https://search.books.com.tw/search/query/key/{kw}",
+    "楽天":            "https://search.rakuten.co.jp/search/mall/{kw}/",
+    "rakuten":         "https://search.rakuten.co.jp/search/mall/{kw}/",
+    "yahoo!ショッピング": "https://shopping.yahoo.co.jp/search?p={kw}",
+    "yahoo!shopping":  "https://shopping.yahoo.co.jp/search?p={kw}",
+    "amazon":          "https://www.amazon.co.jp/s?k={kw}",
+    "価格.com":        "https://kakaku.com/search_results/{kw}/",
+    "kakaku":          "https://kakaku.com/search_results/{kw}/",
+    "ヨドバシ":        "https://www.yodobashi.com/?word={kw}",
+    "yodobashi":       "https://www.yodobashi.com/?word={kw}",
+    "ビックカメラ":    "https://www.biccamera.com/bc/s/?q={kw}",
+    "biccamera":       "https://www.biccamera.com/bc/s/?q={kw}",
+}
+
+
+def _platform_search_url(platform: str, keyword: str) -> str:
+    """Return a guaranteed-valid search URL for the given platform + keyword."""
+    pl = platform.lower()
+    kw = quote(keyword)
+    for key, tmpl in _PLATFORM_SEARCH_URLS.items():
+        if key in pl:
+            return tmpl.format(kw=kw)
+    # Generic Google Shopping fallback
+    return f"https://www.google.com/search?q={quote(platform)}+{kw}&tbm=shop"
+
+
 # ── Gemini Search fallback (used when all scrapers return 0 results) ─────────
 
 async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceListing]:
@@ -460,32 +495,28 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
         prompt = (
             f'Search Google Shopping and Google Search for the current retail price of '
             f'"{keyword}" in Taiwan (台灣).\n'
-            f"Check these platforms: PChome 24h (24h.pchome.com.tw), momo購物網 (momoshop.com.tw), "
-            f"蝦皮購物/Shopee (shopee.tw), Yahoo購物中心 (tw.buy.yahoo.com), "
-            f"燦坤 (tkec.com.tw), 博客來 (books.com.tw).\n\n"
-            f"IMPORTANT: Only include results for the exact product \"{keyword}\", "
-            f"not accessories or unrelated items. Prices must be in TWD and realistic "
-            f"(e.g. Nintendo Switch ~9,000–13,000 TWD, iPhone ~30,000–40,000 TWD).\n\n"
-            f"Return ONLY a valid JSON array (no markdown, no explanation):\n"
+            f"Check these platforms: PChome 24h, momo購物網, 蝦皮購物(Shopee), "
+            f"Yahoo購物中心, 燦坤, 博客來.\n\n"
+            f"IMPORTANT: Only include results for the EXACT product \"{keyword}\", "
+            f"not accessories or unrelated items. Prices must be in TWD and realistic.\n\n"
+            f"Return ONLY a JSON array with NO url field (no markdown, no explanation):\n"
             f'[{{"platform":"PChome 24h","title":"exact full product name","price":9490,'
-            f'"currency":"TWD","url":"https://24h.pchome.com.tw/prod/PRODID"}}]\n\n'
-            f"Include 4-6 results from different stores with accurate current prices in TWD."
+            f'"currency":"TWD"}}]\n\n'
+            f"Include 4-6 results from different stores."
         )
         currency = "TWD"
     else:
         prompt = (
             f'Search Google Shopping and Google Search for the current retail price of '
             f'"{keyword}" in Japan (日本).\n'
-            f"Check these platforms: 楽天市場 (rakuten.co.jp), Yahoo!ショッピング (shopping.yahoo.co.jp), "
-            f"Amazon.co.jp, ヨドバシカメラ (yodobashi.com), ビックカメラ (biccamera.com), "
-            f"価格.com (kakaku.com).\n\n"
-            f"IMPORTANT: Only include results for the exact product \"{keyword}\", "
-            f"not accessories. Prices must be in JPY and realistic "
-            f"(e.g. Nintendo Switch OLED ~36,000–42,000 JPY, iPhone ~150,000–180,000 JPY).\n\n"
-            f"Return ONLY a valid JSON array (no markdown, no explanation):\n"
+            f"Check these platforms: 楽天市場, Yahoo!ショッピング, Amazon.co.jp, "
+            f"ヨドバシカメラ, ビックカメラ, 価格.com.\n\n"
+            f"IMPORTANT: Only include results for the EXACT product \"{keyword}\", "
+            f"not accessories. Prices must be in JPY and realistic.\n\n"
+            f"Return ONLY a JSON array with NO url field (no markdown, no explanation):\n"
             f'[{{"platform":"楽天市場","title":"exact full product name","price":37980,'
-            f'"currency":"JPY","url":"https://search.rakuten.co.jp/search/mall/..."}}]\n\n'
-            f"Include 4-6 results from different stores with accurate current prices in JPY."
+            f'"currency":"JPY"}}]\n\n'
+            f"Include 4-6 results from different stores."
         )
         currency = "JPY"
 
@@ -521,13 +552,15 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
         for item in items:
             price = float(item.get("price", 0))
             title = str(item.get("title", "")).strip()
+            platform = str(item.get("platform", "電商平台"))
             if price > 0 and title:
                 results.append(PriceListing(
-                    platform=str(item.get("platform", "電商平台")),
+                    platform=platform,
                     title=title,
                     price=price,
                     currency=str(item.get("currency", currency)),
-                    url=str(item.get("url", "")),
+                    # Always use a guaranteed-valid search URL, never Gemini's hallucinated product URL
+                    url=_platform_search_url(platform, keyword),
                 ))
         logger.info("Gemini fallback (%s): %d results for '%s'", market, len(results), keyword)
         return results
