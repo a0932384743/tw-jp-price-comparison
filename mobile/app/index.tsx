@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Image,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,24 +21,37 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { searchByImage, searchByText } from '../lib/api';
 import { setLastResult } from '../lib/store';
+import { addToHistory, clearHistory, getHistory, type HistoryItem } from '../lib/history';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { Colors } from '../constants/colors';
-import { hapticSelection, hapticImpact, hapticNotification } from '../lib/haptics';
+import { hapticImpact, hapticNotification, hapticSelection } from '../lib/haptics';
 
 type Mode = 'text' | 'image';
 
-const EXAMPLES = ['Sony WH-1000XM5', 'SK-II 神仙水', 'Nintendo Switch', 'Dyson V15', '資生堂防曬乳'];
+const TRENDING: { label: string; icon: string }[] = [
+  { label: 'Nintendo Switch OLED', icon: '🎮' },
+  { label: 'AirPods Pro',          icon: '🎧' },
+  { label: 'SK-II 神仙水',          icon: '✨' },
+  { label: 'iPhone 16 Pro',        icon: '📱' },
+  { label: 'Dyson V15',            icon: '🌀' },
+  { label: 'Sony WH-1000XM5',     icon: '🎵' },
+];
 
 export default function SearchScreen() {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>('text');
-  const [query, setQuery] = useState('');
+  const [mode, setMode]         = useState<Mode>('text');
+  const [query, setQuery]       = useState('');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState('image/jpeg');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+  const [history, setHistory]   = useState<HistoryItem[]>([]);
 
-  /* ── helpers ─────────────────────────────────────────────────────────── */
+  useEffect(() => {
+    setHistory(getHistory());
+  }, []);
+
+  const refreshHistory = useCallback(() => setHistory(getHistory()), []);
 
   async function runSearch(fn: () => Promise<void>) {
     setLoading(true);
@@ -53,14 +67,18 @@ export default function SearchScreen() {
     }
   }
 
-  const handleTextSearch = () =>
+  const handleTextSearch = (q?: string) => {
+    const searchQuery = (q ?? query).trim();
+    if (!searchQuery) return;
     runSearch(async () => {
-      if (!query.trim()) return;
       hapticImpact(Haptics.ImpactFeedbackStyle.Medium);
-      const result = await searchByText(query.trim());
+      const result = await searchByText(searchQuery);
+      addToHistory(searchQuery, result.keyword_mapping?.category);
+      refreshHistory();
       setLastResult(result);
       router.push('/results');
     });
+  };
 
   const handleImageSearch = () =>
     runSearch(async () => {
@@ -74,10 +92,7 @@ export default function SearchScreen() {
   const pickFromGallery = async () => {
     const { granted } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!granted) { Alert.alert('需要權限', '請在設定中允許存取相簿'); return; }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.85,
-    });
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 });
     if (!res.canceled && res.assets[0]) {
       setImageUri(res.assets[0].uri);
       setImageMime(res.assets[0].mimeType ?? 'image/jpeg');
@@ -94,67 +109,77 @@ export default function SearchScreen() {
     }
   };
 
-  const switchMode = (m: Mode) => {
+  const switchMode = (m: Mode) => { hapticSelection(); setMode(m); setError(null); };
+
+  const handleClearHistory = () => {
     hapticSelection();
-    setMode(m);
-    setError(null);
+    clearHistory();
+    refreshHistory();
   };
 
-  /* ── render ──────────────────────────────────────────────────────────── */
-
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.content}
+        style={s.scroll}
+        contentContainerStyle={s.content}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Hero gradient */}
-        <LinearGradient colors={['#0F172A', '#1E293B']} style={styles.hero}>
-          <Text style={styles.heroFlags}>🇹🇼  ↔  🇯🇵</Text>
-          <Text style={styles.heroTitle}>台日比價 AI 顧問</Text>
-          <Text style={styles.heroSub}>
-            輸入商品或上傳圖片，AI 即時分析{'\n'}匯率、退稅、運費，找到最划算選擇
-          </Text>
+        {/* ── Hero ─────────────────────────────────────────────────── */}
+        <LinearGradient colors={['#0F172A', '#1E3A5F']} style={s.hero}>
+          <View style={s.heroFlags}>
+            <Text style={s.flagText}>🇹🇼</Text>
+            <View style={s.heroArrow}>
+              <Ionicons name="swap-horizontal" size={18} color="rgba(255,255,255,0.6)" />
+            </View>
+            <Text style={s.flagText}>🇯🇵</Text>
+          </View>
+          <Text style={s.heroTitle}>台日比價 AI 顧問</Text>
+          <Text style={s.heroSub}>即時匯率 · 退稅試算 · AI 購買建議</Text>
+
+          <View style={s.heroStats}>
+            {[
+              { icon: '🏬', label: '8+ 購物平台' },
+              { icon: '💱', label: '即時匯率' },
+              { icon: '🤖', label: 'AI 分析' },
+            ].map((stat) => (
+              <View key={stat.label} style={s.statItem}>
+                <Text style={s.statIcon}>{stat.icon}</Text>
+                <Text style={s.statLabel}>{stat.label}</Text>
+              </View>
+            ))}
+          </View>
         </LinearGradient>
 
-        {/* Mode tabs */}
-        <View style={styles.tabBar}>
+        {/* ── Mode tabs ────────────────────────────────────────────── */}
+        <View style={s.tabBar}>
           {(['text', 'image'] as Mode[]).map((m) => (
             <TouchableOpacity
               key={m}
-              style={[styles.tab, mode === m && styles.tabActive]}
+              style={[s.tab, mode === m && s.tabActive]}
               onPress={() => switchMode(m)}
               activeOpacity={0.8}
             >
-              <Ionicons
-                name={m === 'text' ? 'text' : 'camera'}
-                size={16}
-                color={mode === m ? Colors.primary : Colors.textSecondary}
-              />
-              <Text style={[styles.tabLabel, mode === m && styles.tabLabelActive]}>
+              <Ionicons name={m === 'text' ? 'search' : 'camera'} size={16} color={mode === m ? Colors.primary : Colors.textSecondary} />
+              <Text style={[s.tabLabel, mode === m && s.tabLabelActive]}>
                 {m === 'text' ? '文字搜尋' : '圖片搜尋'}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* ── Text mode ──────────────────────────────────────────────── */}
+        {/* ── Text mode ────────────────────────────────────────────── */}
         {mode === 'text' && (
-          <View style={styles.card}>
-            <View style={styles.inputRow}>
+          <View style={s.card}>
+            <View style={s.inputRow}>
               <Ionicons name="search" size={20} color={Colors.textSecondary} />
               <TextInput
-                style={styles.input}
+                style={s.input}
                 placeholder="輸入商品名稱、型號…"
                 placeholderTextColor={Colors.disabled}
                 value={query}
                 onChangeText={setQuery}
-                onSubmitEditing={handleTextSearch}
+                onSubmitEditing={() => handleTextSearch()}
                 returnKeyType="search"
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -167,90 +192,122 @@ export default function SearchScreen() {
             </View>
 
             <TouchableOpacity
-              style={[styles.btn, !query.trim() && styles.btnDisabled]}
-              onPress={handleTextSearch}
+              style={[s.btn, !query.trim() && s.btnDisabled]}
+              onPress={() => handleTextSearch()}
               disabled={!query.trim()}
               activeOpacity={0.8}
             >
               <Ionicons name="analytics" size={18} color="#fff" />
-              <Text style={styles.btnText}>開始比價</Text>
+              <Text style={s.btnText}>開始比價</Text>
             </TouchableOpacity>
 
-            {/* Quick examples */}
-            <Text style={styles.examplesLabel}>熱門搜尋</Text>
-            <View style={styles.chips}>
-              {EXAMPLES.map((ex) => (
+            {/* Trending */}
+            <View style={s.sectionRow}>
+              <Text style={s.sectionLabel}>🔥 熱門搜尋</Text>
+            </View>
+            <View style={s.chips}>
+              {TRENDING.map((item) => (
                 <TouchableOpacity
-                  key={ex}
-                  style={styles.chip}
-                  onPress={() => { setQuery(ex); hapticSelection(); }}
+                  key={item.label}
+                  style={s.chip}
+                  onPress={() => { hapticSelection(); handleTextSearch(item.label); }}
+                  activeOpacity={0.7}
                 >
-                  <Text style={styles.chipText}>{ex}</Text>
+                  <Text style={s.chipIcon}>{item.icon}</Text>
+                  <Text style={s.chipText}>{item.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
         )}
 
-        {/* ── Image mode ─────────────────────────────────────────────── */}
+        {/* ── Image mode ───────────────────────────────────────────── */}
         {mode === 'image' && (
-          <View style={styles.card}>
-            <View style={styles.imageBtns}>
-              <TouchableOpacity style={styles.imageBtn} onPress={pickFromCamera} activeOpacity={0.8}>
+          <View style={s.card}>
+            <View style={s.imageBtns}>
+              <TouchableOpacity style={s.imageBtn} onPress={pickFromCamera} activeOpacity={0.8}>
                 <Ionicons name="camera" size={28} color={Colors.primary} />
-                <Text style={styles.imageBtnLabel}>拍照</Text>
+                <Text style={s.imageBtnLabel}>拍照</Text>
               </TouchableOpacity>
-              <View style={styles.imageBtnDivider} />
-              <TouchableOpacity style={styles.imageBtn} onPress={pickFromGallery} activeOpacity={0.8}>
+              <View style={s.imageBtnDivider} />
+              <TouchableOpacity style={s.imageBtn} onPress={pickFromGallery} activeOpacity={0.8}>
                 <Ionicons name="images" size={28} color={Colors.primary} />
-                <Text style={styles.imageBtnLabel}>從相簿選取</Text>
+                <Text style={s.imageBtnLabel}>從相簿選取</Text>
               </TouchableOpacity>
             </View>
 
             {imageUri ? (
               <>
-                <View style={styles.previewWrapper}>
-                  <Image source={{ uri: imageUri }} style={styles.preview} resizeMode="cover" />
-                  <TouchableOpacity
-                    style={styles.previewClear}
-                    onPress={() => setImageUri(null)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
+                <View style={s.previewWrapper}>
+                  <Image source={{ uri: imageUri }} style={s.preview} resizeMode="cover" />
+                  <TouchableOpacity style={s.previewClear} onPress={() => setImageUri(null)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                     <Ionicons name="close-circle" size={26} color="#fff" />
                   </TouchableOpacity>
                 </View>
-                <TouchableOpacity style={styles.btn} onPress={handleImageSearch} activeOpacity={0.8}>
+                <TouchableOpacity style={s.btn} onPress={handleImageSearch} activeOpacity={0.8}>
                   <Ionicons name="analytics" size={18} color="#fff" />
-                  <Text style={styles.btnText}>分析此圖片</Text>
+                  <Text style={s.btnText}>分析此圖片</Text>
                 </TouchableOpacity>
               </>
             ) : (
-              <View style={styles.imagePlaceholder}>
+              <View style={s.imagePlaceholder}>
                 <Ionicons name="image-outline" size={52} color={Colors.border} />
-                <Text style={styles.imagePlaceholderText}>請拍照或從相簿選取商品圖片</Text>
+                <Text style={s.imagePlaceholderText}>請拍照或從相簿選取商品圖片</Text>
+                <Text style={s.imagePlaceholderHint}>支援 JPG / PNG / WEBP</Text>
               </View>
             )}
           </View>
         )}
 
-        {/* Error */}
+        {/* ── Error ────────────────────────────────────────────────── */}
         {error && (
-          <View style={styles.errorBox}>
+          <View style={s.errorBox}>
             <Ionicons name="alert-circle" size={18} color={Colors.error} />
-            <Text style={styles.errorText} selectable>{error}</Text>
+            <Text style={s.errorText} selectable>{error}</Text>
           </View>
         )}
 
-        {/* Tips */}
-        <View style={styles.tips}>
-          <Text style={styles.tipsTitle}>💡 使用說明</Text>
+        {/* ── Recent searches ──────────────────────────────────────── */}
+        {history.length > 0 && (
+          <View style={s.card}>
+            <View style={s.sectionRow}>
+              <Text style={s.sectionLabel}>🕐 最近搜尋</Text>
+              <TouchableOpacity onPress={handleClearHistory} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={s.clearBtn}>清除</Text>
+              </TouchableOpacity>
+            </View>
+            {history.map((item) => (
+              <TouchableOpacity
+                key={item.query + item.timestamp}
+                style={s.historyItem}
+                onPress={() => { setQuery(item.query); switchMode('text'); handleTextSearch(item.query); }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="time-outline" size={16} color={Colors.textSecondary} />
+                <View style={s.historyContent}>
+                  <Text style={s.historyQuery} numberOfLines={1}>{item.query}</Text>
+                  {item.category && <Text style={s.historyCategory}>{item.category}</Text>}
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={Colors.border} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {/* ── Tips ─────────────────────────────────────────────────── */}
+        <View style={s.tipsCard}>
+          <Text style={s.tipsTitle}>💡 使用說明</Text>
           {[
-            '支援電子、美妝、食品、服飾等各類商品',
-            '日本退稅 10% 僅適用於實體門市購買',
-            '比較結果已納入國際運費試算參考',
-            '圖片搜尋請確保畫面清晰、有商品包裝文字',
-          ].map((t, i) => (
-            <Text key={i} style={styles.tipItem}>• {t}</Text>
+            ['🏬', '比較 8 個以上台日電商平台'],
+            ['💱', '即時日圓匯率，退稅 10% 試算'],
+            ['🤖', '支援文字搜尋與商品圖片辨識'],
+            ['🚢', '比較結果納入運費參考試算'],
+          ].map(([icon, text]) => (
+            <View key={text} style={s.tipRow}>
+              <Text style={s.tipIcon}>{icon}</Text>
+              <Text style={s.tipText}>{text}</Text>
+            </View>
           ))}
         </View>
       </ScrollView>
@@ -260,20 +317,26 @@ export default function SearchScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  scroll:   { flex: 1, backgroundColor: Colors.background },
-  content:  { paddingBottom: 48 },
+/* ── styles ────────────────────────────────────────────────────────────── */
+const s = StyleSheet.create({
+  scroll:  { flex: 1, backgroundColor: Colors.background },
+  content: { paddingBottom: 48 },
 
   /* hero */
-  hero: {
-    paddingTop: 32,
-    paddingBottom: 28,
-    paddingHorizontal: 24,
-    alignItems: 'center',
+  hero: { paddingTop: 28, paddingBottom: 24, paddingHorizontal: 24 },
+  heroFlags: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 12 },
+  flagText:  { fontSize: 32 },
+  heroArrow: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  heroFlags: { fontSize: 28, marginBottom: 8 },
-  heroTitle: { fontSize: 24, fontWeight: '900', color: '#fff', marginBottom: 8, textAlign: 'center' },
-  heroSub:   { fontSize: 13, color: 'rgba(255,255,255,0.85)', textAlign: 'center', lineHeight: 20 },
+  heroTitle: { fontSize: 26, fontWeight: '900', color: '#fff', textAlign: 'center', marginBottom: 6 },
+  heroSub:   { fontSize: 13, color: 'rgba(255,255,255,0.75)', textAlign: 'center', marginBottom: 20 },
+  heroStats: { flexDirection: 'row', justifyContent: 'center', gap: 20 },
+  statItem:  { alignItems: 'center', gap: 4 },
+  statIcon:  { fontSize: 18 },
+  statLabel: { fontSize: 11, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
 
   /* tabs */
   tabBar: {
@@ -290,10 +353,10 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  tab:           { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 10, gap: 6 },
-  tabActive:     { backgroundColor: Colors.primaryLight },
-  tabLabel:      { fontSize: 14, color: Colors.textSecondary, fontWeight: '600' },
-  tabLabelActive:{ color: Colors.primary },
+  tab:            { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 10, gap: 6 },
+  tabActive:      { backgroundColor: Colors.primaryLight },
+  tabLabel:       { fontSize: 14, color: Colors.textSecondary, fontWeight: '600' },
+  tabLabelActive: { color: Colors.primary },
 
   /* card */
   card: {
@@ -301,7 +364,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     margin: 16,
     padding: 16,
-    shadowColor: Colors.shadow,
+    shadowColor: Colors.shadowMd,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 8,
@@ -309,7 +372,7 @@ const styles = StyleSheet.create({
     gap: 14,
   },
 
-  /* text input */
+  /* input */
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -322,81 +385,47 @@ const styles = StyleSheet.create({
   input: { flex: 1, fontSize: 15, color: Colors.text },
 
   /* button */
-  btn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
-    paddingVertical: 14,
-    gap: 8,
-  },
+  btn:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primary, borderRadius: 12, paddingVertical: 14, gap: 8 },
   btnDisabled: { backgroundColor: Colors.disabled },
   btnText:     { color: '#fff', fontSize: 16, fontWeight: '800' },
 
-  /* quick examples */
-  examplesLabel: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip:  { backgroundColor: Colors.background, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6 },
-  chipText: { fontSize: 12, color: Colors.text, fontWeight: '600' },
+  /* section row */
+  sectionRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionLabel:{ fontSize: 13, fontWeight: '700', color: Colors.text },
+  clearBtn:    { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
+
+  /* trending chips */
+  chips:     { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip:      { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, gap: 5, borderWidth: 1, borderColor: Colors.borderLight },
+  chipIcon:  { fontSize: 13 },
+  chipText:  { fontSize: 12, color: Colors.text, fontWeight: '600' },
 
   /* image mode */
-  imageBtns: {
-    flexDirection: 'row',
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  imageBtn: { flex: 1, alignItems: 'center', paddingVertical: 20, gap: 8 },
+  imageBtns: { flexDirection: 'row', borderWidth: 1.5, borderColor: Colors.border, borderRadius: 12, overflow: 'hidden' },
+  imageBtn:  { flex: 1, alignItems: 'center', paddingVertical: 20, gap: 8 },
   imageBtnDivider: { width: 1.5, backgroundColor: Colors.border },
-  imageBtnLabel: { fontSize: 13, fontWeight: '700', color: Colors.primary },
-  imagePlaceholder: {
-    alignItems: 'center',
-    paddingVertical: 32,
-    gap: 10,
-    borderWidth: 2,
-    borderStyle: 'dashed',
-    borderColor: Colors.border,
-    borderRadius: 12,
-  },
+  imageBtnLabel:   { fontSize: 13, fontWeight: '700', color: Colors.primary },
+  imagePlaceholder: { alignItems: 'center', paddingVertical: 32, gap: 8, borderWidth: 2, borderStyle: 'dashed', borderColor: Colors.border, borderRadius: 12 },
   imagePlaceholderText: { fontSize: 13, color: Colors.textSecondary, textAlign: 'center' },
+  imagePlaceholderHint: { fontSize: 11, color: Colors.textTertiary },
   previewWrapper: { position: 'relative' },
-  preview: { width: '100%', height: 220, borderRadius: 10 },
-  previewClear: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 13,
-  },
+  preview:        { width: '100%', height: 220, borderRadius: 10 },
+  previewClear:   { position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 13 },
 
   /* error */
-  errorBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#FDECEA',
-    borderRadius: 10,
-    marginHorizontal: 16,
-    padding: 12,
-    gap: 8,
-  },
+  errorBox:  { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: Colors.errorLight, borderRadius: 10, marginHorizontal: 16, padding: 12, gap: 8 },
   errorText: { flex: 1, fontSize: 13, color: Colors.error, lineHeight: 19 },
 
+  /* history */
+  historyItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  historyContent: { flex: 1 },
+  historyQuery:   { fontSize: 14, color: Colors.text, fontWeight: '500' },
+  historyCategory:{ fontSize: 11, color: Colors.textTertiary, marginTop: 1 },
+
   /* tips */
-  tips: {
-    marginHorizontal: 16,
-    marginTop: 4,
-    backgroundColor: Colors.card,
-    borderRadius: 12,
-    padding: 16,
-    gap: 6,
-    shadowColor: Colors.shadow,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
+  tipsCard:  { marginHorizontal: 16, marginTop: 4, backgroundColor: Colors.card, borderRadius: 12, padding: 16, gap: 10, shadowColor: Colors.shadow, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 1, shadowRadius: 4, elevation: 2 },
   tipsTitle: { fontSize: 14, fontWeight: '700', color: Colors.text, marginBottom: 2 },
-  tipItem:   { fontSize: 13, color: Colors.textSecondary, lineHeight: 20 },
+  tipRow:    { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  tipIcon:   { fontSize: 16, width: 24 },
+  tipText:   { fontSize: 13, color: Colors.textSecondary, flex: 1, lineHeight: 19 },
 });
