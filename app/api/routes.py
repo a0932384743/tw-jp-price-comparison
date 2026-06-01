@@ -21,7 +21,7 @@ from app.schemas.product import PriceListing, SearchResponse
 from app.services.advisor import generate_buying_advice
 from app.services.ai_agent import analyze_input
 from app.services.exchange_rate import get_jpy_to_twd_rate
-from app.services.scraper import fetch_jp_prices, fetch_tw_prices
+from app.services.scraper import fetch_jp_prices, fetch_product_thumbnail, fetch_tw_prices
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -163,10 +163,12 @@ async def search(
             tw_prices, jp_prices = cached_tw, cached_jp
             logger.info("Firestore cache hit: TW=%s / JP=%s",
                         mapping.refined_tw_keyword, mapping.refined_jp_keyword)
+            product_image_url = await fetch_product_thumbnail(mapping.refined_tw_keyword)
         else:
-            tw_prices, jp_prices = await asyncio.gather(
+            tw_prices, jp_prices, product_image_url = await asyncio.gather(
                 fetch_tw_prices(mapping.refined_tw_keyword),
                 fetch_jp_prices(mapping.refined_jp_keyword),
+                fetch_product_thumbnail(mapping.refined_tw_keyword),
             )
 
         # ── Step 3: AI buying advice ────────────────────────────────────────
@@ -203,4 +205,5 @@ async def search(
         jp_listings=jp_prices,
         exchange_rate_jpy_twd=rate,
         advice=advice,
+        product_image_url=product_image_url,
     )

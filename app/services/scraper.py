@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 from urllib.parse import quote
 
 import httpx
@@ -654,3 +655,60 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
 
     logger.info("JP total: %d listings for '%s'", len(combined), keyword)
     return combined
+
+
+async def fetch_product_thumbnail(keyword: str) -> str | None:
+    """Return a product thumbnail URL via DuckDuckGo Image Search.
+
+    Uses DDG's i.js JSON endpoint which returns Bing-CDN thumbnails
+    (tse*.mm.bing.net) that are freely loadable without hotlink restrictions.
+    Falls back to None on any failure so it never blocks the main pipeline.
+    """
+    query = f"{keyword} 商品"
+    headers = {
+        "User-Agent": _UA,
+        "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+    }
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            # Step 1: get vqd token
+            html_resp = await client.get(
+                "https://duckduckgo.com/",
+                params={"q": query, "iax": "images", "ia": "images"},
+                headers={**headers, "Accept": "text/html"},
+                timeout=10,
+            )
+            vqd_match = re.search(r'vqd=(["\'])?([\d-]+)\1', html_resp.text)
+            if not vqd_match:
+                logger.debug("DDG vqd not found for '%s'", keyword)
+                return None
+            vqd = vqd_match.group(2)
+
+            # Step 2: fetch JSON image results
+            json_resp = await client.get(
+                "https://duckduckgo.com/i.js",
+                params={"q": query, "vqd": vqd, "o": "json", "s": "0", "l": "wt-wt"},
+                headers={**headers, "Referer": "https://duckduckgo.com/", "Accept": "application/json"},
+                timeout=10,
+            )
+            results = json_resp.json().get("results", [])
+
+        for item in results[:8]:
+            # thumbnail is a Bing CDN URL – reliably accessible, no hotlink protection
+            thumb = item.get("thumbnail") or item.get("image") or ""
+            if thumb.startswith("https://") and "bing.net" in thumb:
+                logger.info("DDG thumbnail for '%s': %s", keyword, thumb[:80])
+                return thumb
+
+        # fallback: accept any https thumbnail
+        for item in results[:8]:
+            thumb = item.get("thumbnail") or item.get("image") or ""
+            if thumb.startswith("https://"):
+                logger.info("DDG thumbnail (fallback) for '%s': %s", keyword, thumb[:80])
+                return thumb
+
+        logger.debug("DDG: no usable thumbnail for '%s'", keyword)
+        return None
+    except Exception as exc:
+        logger.warning("DDG image search failed for '%s': %s", keyword, exc)
+        return None

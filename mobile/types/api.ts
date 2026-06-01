@@ -34,4 +34,5 @@ export interface SearchResponse {
   jp_listings: PriceListing[];
   exchange_rate_jpy_twd: number;
   advice: BuyingAdvice;
+  product_image_url?: string | null;
 }

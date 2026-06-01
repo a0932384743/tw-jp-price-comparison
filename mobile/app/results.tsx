@@ -142,7 +142,7 @@ export default function ResultsScreen() {
 
   if (!data) return null;
 
-  const { keyword_mapping, exchange_rate_jpy_twd, advice } = data;
+  const { keyword_mapping, exchange_rate_jpy_twd, advice, product_image_url } = data;
 
   return (
     <ScrollView
@@ -173,7 +173,7 @@ export default function ResultsScreen() {
       <SectionHeader market="TW" count={sortedTW.length} />
       <View style={s.listings}>
         {sortedTW.map((l, i) => (
-          <PlatformCard key={i} listing={l} market="TW" exchangeRate={exchange_rate_jpy_twd} isCheapest={i === 0 && sortedTW.length > 1} />
+          <PlatformCard key={i} listing={l} market="TW" exchangeRate={exchange_rate_jpy_twd} isCheapest={i === 0 && sortedTW.length > 1} thumbnailUrl={product_image_url} />
         ))}
         {sortedTW.length === 0 && <EmptyState text="未找到台灣價格資料" />}
       </View>
@@ -182,7 +182,7 @@ export default function ResultsScreen() {
       <SectionHeader market="JP" count={sortedJP.length} />
       <View style={s.listings}>
         {sortedJP.map((l, i) => (
-          <PlatformCard key={i} listing={l} market="JP" exchangeRate={exchange_rate_jpy_twd} isCheapest={i === 0 && sortedJP.length > 1} />
+          <PlatformCard key={i} listing={l} market="JP" exchangeRate={exchange_rate_jpy_twd} isCheapest={i === 0 && sortedJP.length > 1} thumbnailUrl={product_image_url} />
         ))}
         {sortedJP.length === 0 && <EmptyState text="未找到日本價格資料" />}
       </View>

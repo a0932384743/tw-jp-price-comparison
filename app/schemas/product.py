@@ -56,3 +56,4 @@ class SearchResponse(BaseModel):
     jp_listings: list[PriceListing]
     exchange_rate_jpy_twd: float
     advice: BuyingAdvice
+    product_image_url: Optional[str] = None

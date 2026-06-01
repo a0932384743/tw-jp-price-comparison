@@ -9,6 +9,7 @@ interface Props {
   market: 'TW' | 'JP';
   exchangeRate: number;
   isCheapest?: boolean;
+  thumbnailUrl?: string | null;
 }
 
 const PLATFORM_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -29,7 +30,7 @@ const PLATFORM_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
 function fmtTWD(n: number) { return `NT$${Math.round(n).toLocaleString('zh-TW')}`; }
 function fmtJPY(n: number) { return `¥${Math.round(n).toLocaleString('ja-JP')}`; }
 
-export default function PlatformCard({ listing, market, exchangeRate, isCheapest }: Props) {
+export default function PlatformCard({ listing, market, exchangeRate, isCheapest, thumbnailUrl }: Props) {
   const [imgError, setImgError] = useState(false);
   const iconName    = PLATFORM_ICONS[listing.platform] ?? 'cart-outline';
   const accentColor = market === 'TW' ? Colors.tw : Colors.jp;
@@ -41,7 +42,9 @@ export default function PlatformCard({ listing, market, exchangeRate, isCheapest
     if (listing.url) Linking.openURL(listing.url).catch(() => {});
   };
 
-  const showImage = !!listing.image_url && !imgError;
+  // prefer per-listing image, fall back to search-level thumbnail
+  const imageSource = listing.image_url || thumbnailUrl || null;
+  const showImage = !!imageSource && !imgError;
 
   return (
     <View style={styles.card}>
@@ -62,7 +65,7 @@ export default function PlatformCard({ listing, market, exchangeRate, isCheapest
           {/* Thumbnail or placeholder icon */}
           {showImage ? (
             <Image
-              source={{ uri: listing.image_url! }}
+              source={{ uri: imageSource! }}
               style={styles.thumbnail}
               resizeMode="contain"
               onError={() => setImgError(true)}
