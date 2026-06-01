@@ -15,7 +15,6 @@
   "dependencies": {
     "@expo/metro-runtime": "~56.0.13",
     "@expo/vector-icons": "^15.1.1",
-    "@react-native/jest-preset": "^0.85.3",
     "expo": "~56.0.5",
     "expo-asset": "~56.0.15",
     "expo-constants": "~56.0.16",
@@ -36,6 +35,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
+    "@react-native/jest-preset": "^0.85.3",
     "@testing-library/react-native": "^13.3.3",
     "@types/jest": "^29.5.14",
     "@types/react": "~19.2.15",
@@ -43,6 +43,12 @@
     "jest-expo": "~56.0.4",
     "react-test-renderer": "19.2.3",
     "typescript": "^6.0.3"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "transformIgnorePatterns": [
+      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg)"
+    ]
   },
   "overrides": {
     "react": "19.2.3",
