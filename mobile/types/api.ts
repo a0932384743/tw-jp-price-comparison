@@ -10,6 +10,7 @@ export interface PriceListing {
   price: number;
   currency: 'TWD' | 'JPY';
   url: string;
+  image_url?: string | null;
 }
 
 export interface ProsCons {

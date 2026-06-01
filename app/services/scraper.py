@@ -108,6 +108,8 @@ async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceL
             name = prod.get("Name", "").strip()
             price = prod.get("Price", {}).get("P") or prod.get("Price", {}).get("M")
             prod_id = prod.get("Id", "")
+            pic = prod.get("Pic", "")
+            image_url = f"https://a.ecimg.tw/items/{pic}" if pic else None
             if name and price:
                 results.append(PriceListing(
                     platform="PChome 24h",
@@ -115,6 +117,7 @@ async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceL
                     price=float(price),
                     currency="TWD",
                     url=f"https://24h.pchome.com.tw/prod/{prod_id}",
+                    image_url=image_url,
                 ))
         results = _filter_outliers(results)[:5]
         logger.info("PChome: %d results for '%s'", len(results), keyword)
@@ -139,18 +142,22 @@ async def _scrape_momo(client: httpx.AsyncClient, keyword: str) -> list[PriceLis
             title_el = card.select_one(".prdName")
             price_el = card.select_one(".price b")
             link_el = card.select_one("a")
+            img_el = card.select_one("img[src], img[data-src]")
             if not (title_el and price_el):
                 continue
             try:
                 price = float(price_el.text.strip().replace(",", ""))
                 href = link_el.get("href", "") if link_el else ""
                 full_url = href if href.startswith("http") else f"https://www.momoshop.com.tw{href}"
+                raw_img = img_el.get("src") or img_el.get("data-src") if img_el else None
+                image_url = raw_img if raw_img and raw_img.startswith("http") else None
                 results.append(PriceListing(
                     platform="momo購物網",
                     title=title_el.text.strip(),
                     price=price,
                     currency="TWD",
                     url=full_url,
+                    image_url=image_url,
                 ))
             except (ValueError, AttributeError):
                 continue
@@ -191,6 +198,8 @@ async def _scrape_shopee_tw(client: httpx.AsyncClient, keyword: str) -> list[Pri
             price = float(price_raw) / 100000 if price_raw > 100000 else float(price_raw)
             item_id = item.get("itemid") or item.get("item_id", "")
             shop_id = item.get("shopid") or item.get("shop_id", "")
+            img_hash = item.get("image") or (item.get("images") or [None])[0]
+            image_url = f"https://cf.shopee.tw/file/{img_hash}_tn" if img_hash else None
             if name and price > 1:
                 results.append(PriceListing(
                     platform="蝦皮購物",
@@ -198,6 +207,7 @@ async def _scrape_shopee_tw(client: httpx.AsyncClient, keyword: str) -> list[Pri
                     price=price,
                     currency="TWD",
                     url=f"https://shopee.tw/product/{shop_id}/{item_id}",
+                    image_url=image_url,
                 ))
         results = _filter_outliers(results)[:5]
         logger.info("Shopee TW: %d results for '%s'", len(results), keyword)
@@ -219,6 +229,7 @@ async def _scrape_yahoo_tw(client: httpx.AsyncClient, keyword: str) -> list[Pric
             title_el = card.select_one("p.Ell, h3, [class*='title']")
             price_el = card.select_one("[class*='price'], [class*='Price']")
             link_el = card.select_one("a[href]")
+            img_el = card.select_one("img[src], img[data-src]")
             if not (title_el and price_el):
                 continue
             try:
@@ -227,12 +238,15 @@ async def _scrape_yahoo_tw(client: httpx.AsyncClient, keyword: str) -> list[Pric
                     continue
                 href = link_el.get("href", "") if link_el else ""
                 full_url = href if href.startswith("http") else f"https://tw.buy.yahoo.com{href}"
+                raw_img = img_el.get("src") or img_el.get("data-src") if img_el else None
+                image_url = raw_img if raw_img and raw_img.startswith("http") else None
                 results.append(PriceListing(
                     platform="Yahoo購物中心",
                     title=title_el.text.strip(),
                     price=float(price_raw),
                     currency="TWD",
                     url=full_url,
+                    image_url=image_url,
                 ))
             except (ValueError, AttributeError):
                 continue
@@ -265,18 +279,22 @@ async def _scrape_rakuten_jp(client: httpx.AsyncClient, keyword: str) -> list[Pr
                 or card.select_one(".content.price .important")
                 or card.select_one(".important")
             )
+            img_el = card.select_one("img[src]")
             if not (title_el and price_el):
                 continue
             try:
                 price_raw = "".join(c for c in price_el.text if c.isdigit())
                 if not price_raw:
                     continue
+                raw_img = img_el.get("src") if img_el else None
+                image_url = raw_img if raw_img and raw_img.startswith("http") else None
                 results.append(PriceListing(
                     platform="楽天市場",
                     title=title_el.text.strip(),
                     price=float(price_raw),
                     currency="JPY",
                     url=title_el.get("href", ""),
+                    image_url=image_url,
                 ))
             except (ValueError, AttributeError):
                 continue
@@ -317,6 +335,8 @@ async def _scrape_yahoo_shopping_jp(client: httpx.AsyncClient, keyword: str) -> 
                     name = item.get("name") or item.get("title") or ""
                     price = item.get("price") or item.get("lowestPrice") or 0
                     item_url = item.get("url") or item.get("productUrl") or ""
+                    raw_img = item.get("image") or item.get("imageUrl") or ""
+                    image_url = str(raw_img) if raw_img and str(raw_img).startswith("http") else None
                     if name and price:
                         results.append(PriceListing(
                             platform="Yahoo!ショッピング",
@@ -324,6 +344,7 @@ async def _scrape_yahoo_shopping_jp(client: httpx.AsyncClient, keyword: str) -> 
                             price=float(price),
                             currency="JPY",
                             url=str(item_url),
+                            image_url=image_url,
                         ))
                 if results:
                     logger.info("Yahoo Shopping (JSON): %d results for '%s'", len(results), keyword)
@@ -343,6 +364,7 @@ async def _scrape_yahoo_shopping_jp(client: httpx.AsyncClient, keyword: str) -> 
                 card.select_one("[class*='Price'] span")
                 or card.select_one("[class*='price'] span")
             )
+            img_el = card.select_one("img[src]")
             if not (title_el and price_el):
                 continue
             try:
@@ -350,12 +372,15 @@ async def _scrape_yahoo_shopping_jp(client: httpx.AsyncClient, keyword: str) -> 
                 if not price_raw:
                     continue
                 href = title_el.get("href", "")
+                raw_img = img_el.get("src") if img_el else None
+                image_url = raw_img if raw_img and raw_img.startswith("http") else None
                 results.append(PriceListing(
                     platform="Yahoo!ショッピング",
                     title=title_el.text.strip(),
                     price=float(price_raw),
                     currency="JPY",
                     url=href if href.startswith("http") else f"https://shopping.yahoo.co.jp{href}",
+                    image_url=image_url,
                 ))
             except (ValueError, AttributeError):
                 continue
@@ -382,6 +407,7 @@ async def _scrape_amazon_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
             title_el = card.select_one("h2 span.a-text-normal, h2 span")
             price_whole = card.select_one("span.a-price-whole")
             link_el = card.select_one("h2 a.a-link-normal")
+            img_el = card.select_one("img.s-image")
             if not (title_el and price_whole):
                 continue
             try:
@@ -390,12 +416,15 @@ async def _scrape_amazon_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
                     continue
                 href = link_el.get("href", "") if link_el else ""
                 full_url = f"https://www.amazon.co.jp{href}" if href.startswith("/") else href
+                raw_img = img_el.get("src") if img_el else None
+                image_url = raw_img if raw_img and raw_img.startswith("http") else None
                 results.append(PriceListing(
                     platform="Amazon Japan",
                     title=title_el.text.strip(),
                     price=float(price_raw),
                     currency="JPY",
                     url=full_url,
+                    image_url=image_url,
                 ))
             except (ValueError, AttributeError):
                 continue
@@ -419,6 +448,7 @@ async def _scrape_kakaku_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
             title_el = card.select_one("p.ckitanker_name a, .p-item_name a, h2 a, a.p-item_name")
             price_el = card.select_one("span.priceTxt, .p-item_price strong, [class*='price']")
             link_el = title_el if title_el else card.select_one("a[href]")
+            img_el = card.select_one("img[src]")
             if not (title_el and price_el):
                 continue
             try:
@@ -427,12 +457,15 @@ async def _scrape_kakaku_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
                     continue
                 href = link_el.get("href", "") if link_el else ""
                 full_url = href if href.startswith("http") else f"https://kakaku.com{href}"
+                raw_img = img_el.get("src") if img_el else None
+                image_url = raw_img if raw_img and raw_img.startswith("http") else None
                 results.append(PriceListing(
                     platform="価格.com",
                     title=title_el.text.strip(),
                     price=float(price_raw),
                     currency="JPY",
                     url=full_url,
+                    image_url=image_url,
                 ))
             except (ValueError, AttributeError):
                 continue

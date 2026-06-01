@@ -24,6 +24,7 @@ class PriceListing(BaseModel):
     price: float = Field(description="Price in local currency (TWD or JPY)")
     currency: str = Field(default="TWD")
     url: str
+    image_url: Optional[str] = Field(default=None, description="Product thumbnail URL")
 
 
 # --------------------------------------------------------------------------- #
