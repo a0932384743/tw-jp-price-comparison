@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Animated,
-  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,10 +11,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { getLastResult } from '../lib/store';
+import { getPriceHistory } from '../lib/api';
+import { isFavorite, toggleFavorite } from '../lib/favorites';
 import PlatformCard from '../components/PlatformCard';
 import AdviceCard from '../components/AdviceCard';
 import { Colors } from '../constants/colors';
-import type { BuyingAdvice, PriceListing, SearchResponse } from '../types/api';
+import type { BuyingAdvice, PriceHistoryPoint, SearchResponse } from '../types/api';
 
 const LOCATION_LABELS: Record<string, string> = {
   Taiwan:  '🇹🇼 台灣較划算',
@@ -119,17 +119,68 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
+/* ── Price History Chart ───────────────────────────────────────────────────── */
+
+const BAR_MAX_H = 52;
+
+function PriceHistoryChart({ keyword, market }: { keyword: string; market: 'TW' | 'JP'; rate: number }) {
+  const [history, setHistory] = useState<PriceHistoryPoint[]>([]);
+
+  useEffect(() => {
+    getPriceHistory(keyword, market).then(setHistory).catch(() => {});
+  }, [keyword, market]);
+
+  if (history.length < 2) return null;
+
+  const color = market === 'TW' ? Colors.tw : Colors.jp;
+  const maxPrice = Math.max(...history.map(h => h.avg_price));
+  const fmtPrice = (n: number) =>
+    market === 'TW' ? `NT$${Math.round(n / 100) * 100}` : `¥${Math.round(n / 100) * 100}`;
+
+  return (
+    <View style={ph.container}>
+      <View style={ph.header}>
+        <Ionicons name="trending-up" size={15} color={color} />
+        <Text style={[ph.title, { color }]}>{market === 'TW' ? '🇹🇼' : '🇯🇵'} 近 7 日均價走勢</Text>
+      </View>
+      <View style={ph.chart}>
+        {history.map((point) => {
+          const barH = Math.max(6, (point.avg_price / maxPrice) * BAR_MAX_H);
+          return (
+            <View key={point.date} style={ph.col}>
+              <Text style={ph.priceLabel}>{fmtPrice(point.avg_price)}</Text>
+              <View style={[ph.bar, { height: barH, backgroundColor: color }]} />
+              <Text style={ph.dateLabel}>{point.date.slice(5)}</Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 /* ── Main Screen ───────────────────────────────────────────────────────────── */
 
 export default function ResultsScreen() {
   const router = useRouter();
   const [data, setData] = useState<SearchResponse | null>(null);
+  const [favorited, setFavorited] = useState(false);
 
   useEffect(() => {
     const result = getLastResult();
     if (!result) { router.replace('/'); return; }
     setData(result);
+    setFavorited(isFavorite(result.keyword_mapping.refined_tw_keyword));
   }, [router]);
+
+  const handleToggleFavorite = () => {
+    if (!data) return;
+    const nowFav = toggleFavorite(
+      data.keyword_mapping.refined_tw_keyword,
+      data.keyword_mapping.category,
+    );
+    setFavorited(nowFav);
+  };
 
   const sortedTW = useMemo(
     () => [...(data?.tw_listings ?? [])].sort((a, b) => a.price - b.price),
@@ -142,7 +193,14 @@ export default function ResultsScreen() {
 
   if (!data) return null;
 
-  const { keyword_mapping, exchange_rate_jpy_twd, advice, product_image_url } = data;
+  const { keyword_mapping, exchange_rate_jpy_twd, advice, product_image_url, fetched_at } = data;
+
+  const fetchedLabel = fetched_at
+    ? (() => {
+        const d = new Date(fetched_at);
+        return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')} 抓取`;
+      })()
+    : null;
 
   return (
     <ScrollView
@@ -152,15 +210,28 @@ export default function ResultsScreen() {
     >
       {/* ── 1. Product header ── */}
       <LinearGradient colors={['#0F172A', '#1E3A5F']} style={s.productHeader}>
-        <View style={s.categoryBadge}>
-          <Ionicons name="pricetag" size={11} color="#fff" />
-          <Text style={s.categoryText}>{keyword_mapping.category}</Text>
+        <View style={s.headerTopRow}>
+          <View style={s.categoryBadge}>
+            <Ionicons name="pricetag" size={11} color="#fff" />
+            <Text style={s.categoryText}>{keyword_mapping.category}</Text>
+          </View>
+          <TouchableOpacity onPress={handleToggleFavorite} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name={favorited ? 'heart' : 'heart-outline'} size={22} color={favorited ? '#F87171' : 'rgba(255,255,255,0.6)'} />
+          </TouchableOpacity>
         </View>
         <Text style={s.productName}>{keyword_mapping.refined_tw_keyword}</Text>
         <Text style={s.jpKeyword}>🇯🇵 {keyword_mapping.refined_jp_keyword}</Text>
-        <View style={s.rateChip}>
-          <Ionicons name="swap-horizontal" size={12} color="rgba(255,255,255,0.7)" />
-          <Text style={s.rateText}>1 JPY = {exchange_rate_jpy_twd.toFixed(3)} TWD</Text>
+        <View style={s.headerBottomRow}>
+          <View style={s.rateChip}>
+            <Ionicons name="swap-horizontal" size={12} color="rgba(255,255,255,0.7)" />
+            <Text style={s.rateText}>1 JPY = {exchange_rate_jpy_twd.toFixed(3)} TWD</Text>
+          </View>
+          {fetchedLabel && (
+            <View style={s.fetchedChip}>
+              <Ionicons name="time-outline" size={11} color="rgba(255,255,255,0.6)" />
+              <Text style={s.fetchedText}>{fetchedLabel}</Text>
+            </View>
+          )}
         </View>
       </LinearGradient>
 
@@ -187,7 +258,13 @@ export default function ResultsScreen() {
         {sortedJP.length === 0 && <EmptyState text="未找到日本價格資料" />}
       </View>
 
-      {/* ── 5. Detailed AI analysis ── */}
+      {/* ── 5. Price history charts ── */}
+      <View style={s.historySection}>
+        <PriceHistoryChart keyword={keyword_mapping.refined_tw_keyword} market="TW" rate={exchange_rate_jpy_twd} />
+        <PriceHistoryChart keyword={keyword_mapping.refined_jp_keyword} market="JP" rate={exchange_rate_jpy_twd} />
+      </View>
+
+      {/* ── 6. Detailed AI analysis ── */}
       <View style={s.adviceSection}>
         <View style={s.adviceHeader}>
           <Ionicons name="sparkles" size={18} color={Colors.gold} />
@@ -211,6 +288,8 @@ const s = StyleSheet.create({
 
   /* product header */
   productHeader: { padding: 16, paddingTop: 20, gap: 6 },
+  headerTopRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerBottomRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 2 },
   categoryBadge: {
     flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
     backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 20,
@@ -222,9 +301,18 @@ const s = StyleSheet.create({
   rateChip: {
     flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
     backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 20,
-    paddingHorizontal: 10, paddingVertical: 5, gap: 5, marginTop: 2,
+    paddingHorizontal: 10, paddingVertical: 5, gap: 5,
   },
   rateText: { fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: '600' },
+  fetchedChip: {
+    flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 20,
+    paddingHorizontal: 8, paddingVertical: 4, gap: 4,
+  },
+  fetchedText: { fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: '500' },
+
+  /* price history */
+  historySection: { marginHorizontal: 16, marginTop: 16, gap: 10 },
 
   /* savings banner */
   bannerWrapper: { marginHorizontal: 16, marginTop: 14 },
@@ -279,4 +367,25 @@ const s = StyleSheet.create({
     borderRadius: 12, paddingVertical: 13, gap: 8,
   },
   newSearchText: { fontSize: 15, fontWeight: '700', color: Colors.primary },
+});
+
+const ph = StyleSheet.create({
+  container: {
+    backgroundColor: Colors.card,
+    borderRadius: 14,
+    padding: 14,
+    gap: 10,
+    shadowColor: Colors.shadowMd,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  header:     { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  title:      { fontSize: 13, fontWeight: '700' },
+  chart:      { flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: BAR_MAX_H + 32 },
+  col:        { flex: 1, alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
+  bar:        { width: '100%', borderRadius: 4, minHeight: 6 },
+  priceLabel: { fontSize: 9, color: Colors.textTertiary, textAlign: 'center' },
+  dateLabel:  { fontSize: 9, color: Colors.textSecondary, textAlign: 'center' },
 });

@@ -65,13 +65,16 @@ def _mock_tw_prices(keyword: str) -> list[PriceListing]:
     return [
         PriceListing(platform="momo購物網", title=f"{keyword} 【momo限定】正品保固",
                      price=float(base), currency="TWD",
-                     url=f"https://www.momoshop.com.tw/search/searchShop.jsp?keyword={kw}"),
+                     url=f"https://www.momoshop.com.tw/search/searchShop.jsp?keyword={kw}",
+                     data_source="ai_estimated"),
         PriceListing(platform="蝦皮購物 (Shopee TW)", title=f"{keyword} 台灣賣家 快速出貨",
                      price=float(rng.randint(int(base * 0.85), int(base * 0.95))), currency="TWD",
-                     url=f"https://shopee.tw/search?keyword={kw}"),
+                     url=f"https://shopee.tw/search?keyword={kw}",
+                     data_source="ai_estimated"),
         PriceListing(platform="PChome 24h", title=f"{keyword} PChome獨家優惠",
                      price=float(rng.randint(int(base * 0.90), int(base * 1.05))), currency="TWD",
-                     url=f"https://24h.pchome.com.tw/search/?q={kw}"),
+                     url=f"https://24h.pchome.com.tw/search/?q={kw}",
+                     data_source="ai_estimated"),
     ]
 
 
@@ -82,13 +85,16 @@ def _mock_jp_prices(keyword: str) -> list[PriceListing]:
     return [
         PriceListing(platform="楽天市場", title=f"{keyword} 楽天最安値 送料無料",
                      price=float(base), currency="JPY",
-                     url=f"https://search.rakuten.co.jp/search/mall/{kw}/"),
+                     url=f"https://search.rakuten.co.jp/search/mall/{kw}/",
+                     data_source="ai_estimated"),
         PriceListing(platform="Yahoo!ショッピング", title=f"{keyword} Yahoo限定セール",
                      price=float(rng.randint(int(base * 0.90), int(base * 1.02))), currency="JPY",
-                     url=f"https://shopping.yahoo.co.jp/search?p={kw}"),
+                     url=f"https://shopping.yahoo.co.jp/search?p={kw}",
+                     data_source="ai_estimated"),
         PriceListing(platform="Amazon Japan", title=f"{keyword} Amazon正規品",
                      price=float(rng.randint(int(base * 0.88), int(base * 0.98))), currency="JPY",
-                     url=f"https://www.amazon.co.jp/s?k={kw}"),
+                     url=f"https://www.amazon.co.jp/s?k={kw}",
+                     data_source="ai_estimated"),
     ]
 
 
@@ -598,13 +604,97 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
                     title=title,
                     price=price,
                     currency=str(item.get("currency", currency)),
-                    # Always use a guaranteed-valid search URL, never Gemini's hallucinated product URL
                     url=_platform_search_url(platform, keyword),
+                    data_source="ai_estimated",
                 ))
         logger.info("Gemini fallback (%s): %d results for '%s'", market, len(results), keyword)
         return results
     except (json.JSONDecodeError, ValueError) as exc:
         logger.warning("Failed to parse Gemini price response for '%s': %s | text: %.200s", keyword, exc, text)
+        return []
+
+
+# ── Japan extra scrapers ─────────────────────────────────────────────────────
+
+async def _scrape_yodobashi(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """ヨドバシカメラ HTML search."""
+    url = f"https://www.yodobashi.com/?word={quote(keyword)}"
+    try:
+        resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results: list[PriceListing] = []
+        for card in soup.select("li.js_productListItem, li.prdLstItems, div.prdLstItem")[:8]:
+            title_el = card.select_one("p.elCardMainTitle, .prdName, h2 a, h3 a, p[class*='name']")
+            price_el = card.select_one("span.this_price, .price, [class*='price'] span, strong")
+            link_el = card.select_one("a[href]")
+            img_el = card.select_one("img[src]")
+            if not (title_el and price_el):
+                continue
+            try:
+                price_raw = "".join(c for c in price_el.text if c.isdigit())
+                if not price_raw:
+                    continue
+                href = link_el.get("href", "") if link_el else ""
+                full_url = href if href.startswith("http") else f"https://www.yodobashi.com{href}"
+                raw_img = img_el.get("src") if img_el else None
+                image_url = raw_img if raw_img and raw_img.startswith("http") else None
+                results.append(PriceListing(
+                    platform="ヨドバシカメラ",
+                    title=title_el.text.strip(),
+                    price=float(price_raw),
+                    currency="JPY",
+                    url=full_url,
+                    image_url=image_url,
+                ))
+            except (ValueError, AttributeError):
+                continue
+        results = _filter_outliers(results)[:5]
+        logger.info("Yodobashi: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("Yodobashi scrape failed for '%s': %s", keyword, exc)
+        return []
+
+
+async def _scrape_biccamera(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """ビックカメラ HTML search."""
+    url = f"https://www.biccamera.com/bc/s/?q={quote(keyword)}"
+    try:
+        resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results: list[PriceListing] = []
+        for card in soup.select("li.js_goods_item, li.itembox, div.goodsbox, li[class*='item']")[:8]:
+            title_el = card.select_one("p.goods_name, .item_name, h2 a, h3 a, a[class*='name']")
+            price_el = card.select_one("span.bc-value, .price, [class*='price'], strong")
+            link_el = card.select_one("a[href]")
+            img_el = card.select_one("img[src]")
+            if not (title_el and price_el):
+                continue
+            try:
+                price_raw = "".join(c for c in price_el.text if c.isdigit())
+                if not price_raw:
+                    continue
+                href = link_el.get("href", "") if link_el else ""
+                full_url = href if href.startswith("http") else f"https://www.biccamera.com{href}"
+                raw_img = img_el.get("src") if img_el else None
+                image_url = raw_img if raw_img and raw_img.startswith("http") else None
+                results.append(PriceListing(
+                    platform="ビックカメラ",
+                    title=title_el.text.strip(),
+                    price=float(price_raw),
+                    currency="JPY",
+                    url=full_url,
+                    image_url=image_url,
+                ))
+            except (ValueError, AttributeError):
+                continue
+        results = _filter_outliers(results)[:5]
+        logger.info("BIC Camera: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("BIC Camera scrape failed for '%s': %s", keyword, exc)
         return []
 
 
@@ -626,6 +716,9 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
             _scrape_yahoo_tw(client, keyword),
         )
     combined = [r for src in results_per_source for r in src]
+    for listing in combined:
+        if listing.data_source is None:
+            listing.data_source = "scraped"
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
@@ -650,8 +743,13 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
             _scrape_yahoo_shopping_jp(client, keyword),
             _scrape_amazon_jp(client, keyword),
             _scrape_kakaku_jp(client, keyword),
+            _scrape_yodobashi(client, keyword),
+            _scrape_biccamera(client, keyword),
         )
     combined = [r for src in results_per_source for r in src]
+    for listing in combined:
+        if listing.data_source is None:
+            listing.data_source = "scraped"
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:

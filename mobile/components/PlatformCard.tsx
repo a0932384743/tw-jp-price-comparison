@@ -60,6 +60,12 @@ export default function PlatformCard({ listing, market, exchangeRate, isCheapest
       <View style={[styles.header, { backgroundColor: accentColor }]}>
         <Ionicons name={iconName} size={13} color="#fff" />
         <Text style={styles.platform} numberOfLines={1}>{listing.platform}</Text>
+        {listing.data_source === 'ai_estimated' && (
+          <View style={styles.aiBadge}>
+            <Ionicons name="sparkles" size={9} color={Colors.gold} />
+            <Text style={styles.aiText}>AI 估算</Text>
+          </View>
+        )}
         {isCheapest && (
           <View style={styles.cheapestBadge}>
             <Text style={styles.cheapestText}>最低價 🏅</Text>
@@ -148,6 +154,8 @@ const styles = StyleSheet.create({
   platform:      { fontSize: 12, color: '#fff', fontWeight: '600', flex: 1 },
   cheapestBadge: { backgroundColor: 'rgba(255,255,255,0.22)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
   cheapestText:  { fontSize: 11, color: '#fff', fontWeight: '700' },
+  aiBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: Colors.goldLight, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
+  aiText:  { fontSize: 10, color: Colors.gold, fontWeight: '700' },
 
   body:    { padding: 12, gap: 10 },
   bodyRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },

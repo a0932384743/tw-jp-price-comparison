@@ -15,7 +15,7 @@ import asyncio
 import hashlib
 import logging
 import time
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
@@ -242,7 +242,48 @@ async def search(
         exchange_rate_jpy_twd=rate,
         advice=advice,
         product_image_url=product_image_url,
+        fetched_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+# ── Price history endpoint ───────────────────────────────────────────────────
+
+@router.get("/price-history", summary="Historical average prices from Firestore cache")
+async def price_history_endpoint(
+    keyword: str = Query(..., description="Product keyword"),
+    market: str = Query(default="TW", description="TW or JP"),
+):
+    """Return up to 7 days of price history from the Firestore price_cache collection.
+
+    Computes MD5 document IDs for the past 7 days and reads them in parallel.
+    Returns an empty list when Firestore is unavailable.
+    """
+    if not is_available():
+        return []
+
+    def _fetch() -> list[dict]:
+        db = get_db()
+        today = date.today()
+        history: list[dict] = []
+        for i in range(7):
+            d = today - timedelta(days=i)
+            raw = f"{keyword}|{market}|{d}"
+            cache_id = hashlib.md5(raw.encode()).hexdigest()
+            doc = db.collection("price_cache").document(cache_id).get()
+            if doc.exists:
+                data = doc.to_dict()
+                listings = data.get("listings", [])
+                prices = [float(l.get("price", 0)) for l in listings if l.get("price", 0) > 0]
+                if prices:
+                    history.append({
+                        "date": str(d),
+                        "avg_price": round(sum(prices) / len(prices)),
+                        "min_price": min(prices),
+                        "count": len(prices),
+                    })
+        return sorted(history, key=lambda x: x["date"])
+
+    return await asyncio.to_thread(_fetch)
 
 
 # ── Thumbnail proxy ──────────────────────────────────────────────────────────

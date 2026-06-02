@@ -11,6 +11,7 @@ export interface PriceListing {
   currency: 'TWD' | 'JPY';
   url: string;
   image_url?: string | null;
+  data_source?: 'scraped' | 'ai_estimated' | null;
 }
 
 export interface ProsCons {
@@ -35,4 +36,12 @@ export interface SearchResponse {
   exchange_rate_jpy_twd: number;
   advice: BuyingAdvice;
   product_image_url?: string | null;
+  fetched_at?: string | null;
+}
+
+export interface PriceHistoryPoint {
+  date: string;
+  avg_price: number;
+  min_price: number;
+  count: number;
 }

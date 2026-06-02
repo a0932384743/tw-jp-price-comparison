@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -22,6 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { searchByImage, searchByText } from '../lib/api';
 import { setLastResult } from '../lib/store';
 import { addToHistory, clearHistory, getHistory, type HistoryItem } from '../lib/history';
+import { getFavorites, removeFavorite, type FavoriteItem } from '../lib/favorites';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { Colors } from '../constants/colors';
 import { hapticImpact, hapticNotification, hapticSelection } from '../lib/haptics';
@@ -43,19 +44,26 @@ export default function SearchScreen() {
   const [query, setQuery]       = useState('');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState('image/jpeg');
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState<string | null>(null);
-  const [history, setHistory]   = useState<HistoryItem[]>([]);
+  const [loading, setLoading]       = useState(false);
+  const [coldStart, setColdStart]   = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+  const [history, setHistory]       = useState<HistoryItem[]>([]);
+  const [favorites, setFavorites]   = useState<FavoriteItem[]>([]);
+  const coldStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setHistory(getHistory());
+    setFavorites(getFavorites());
   }, []);
 
   const refreshHistory = useCallback(() => setHistory(getHistory()), []);
+  const refreshFavorites = useCallback(() => setFavorites(getFavorites()), []);
 
   async function runSearch(fn: () => Promise<void>) {
     setLoading(true);
     setError(null);
+    setColdStart(false);
+    coldStartTimer.current = setTimeout(() => setColdStart(true), 6000);
     try {
       await fn();
     } catch (e: unknown) {
@@ -64,6 +72,8 @@ export default function SearchScreen() {
       hapticNotification(Haptics.NotificationFeedbackType.Error);
     } finally {
       setLoading(false);
+      setColdStart(false);
+      if (coldStartTimer.current) clearTimeout(coldStartTimer.current);
     }
   }
 
@@ -117,6 +127,12 @@ export default function SearchScreen() {
     refreshHistory();
   };
 
+  const handleRemoveFavorite = (keyword: string) => {
+    hapticSelection();
+    removeFavorite(keyword);
+    refreshFavorites();
+  };
+
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView
@@ -139,7 +155,7 @@ export default function SearchScreen() {
 
           <View style={s.heroStats}>
             {[
-              { icon: '🏬', label: '8+ 購物平台' },
+              { icon: '🏬', label: '10+ 購物平台' },
               { icon: '💱', label: '即時匯率' },
               { icon: '🤖', label: 'AI 分析' },
             ].map((stat) => (
@@ -149,6 +165,12 @@ export default function SearchScreen() {
               </View>
             ))}
           </View>
+
+          <TouchableOpacity style={s.heroImgBtn} onPress={() => { hapticSelection(); switchMode('image'); }} activeOpacity={0.8}>
+            <Ionicons name="camera" size={15} color="#fff" />
+            <Text style={s.heroImgBtnText}>📸 拍照搜尋商品</Text>
+            <Ionicons name="chevron-forward" size={13} color="rgba(255,255,255,0.6)" />
+          </TouchableOpacity>
         </LinearGradient>
 
         {/* ── Mode tabs ────────────────────────────────────────────── */}
@@ -268,6 +290,35 @@ export default function SearchScreen() {
           </View>
         )}
 
+        {/* ── Favorites / Watchlist ────────────────────────────────── */}
+        {favorites.length > 0 && (
+          <View style={s.card}>
+            <View style={s.sectionRow}>
+              <Text style={s.sectionLabel}>❤️ 收藏清單</Text>
+            </View>
+            {favorites.map((item) => (
+              <TouchableOpacity
+                key={item.keyword + item.savedAt}
+                style={s.historyItem}
+                onPress={() => { setQuery(item.keyword); switchMode('text'); handleTextSearch(item.keyword); }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="heart" size={16} color={Colors.jp} />
+                <View style={s.historyContent}>
+                  <Text style={s.historyQuery} numberOfLines={1}>{item.keyword}</Text>
+                  {item.category && <Text style={s.historyCategory}>{item.category}</Text>}
+                </View>
+                <TouchableOpacity
+                  onPress={() => handleRemoveFavorite(item.keyword)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close" size={16} color={Colors.border} />
+                </TouchableOpacity>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         {/* ── Recent searches ──────────────────────────────────────── */}
         {history.length > 0 && (
           <View style={s.card}>
@@ -312,7 +363,7 @@ export default function SearchScreen() {
         </View>
       </ScrollView>
 
-      {loading && <LoadingOverlay />}
+      {loading && <LoadingOverlay coldStart={coldStart} />}
     </KeyboardAvoidingView>
   );
 }
@@ -337,6 +388,17 @@ const s = StyleSheet.create({
   statItem:  { alignItems: 'center', gap: 4 },
   statIcon:  { fontSize: 18 },
   statLabel: { fontSize: 11, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
+
+  /* hero image shortcut */
+  heroImgBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    marginTop: 14, gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8,
+    alignSelf: 'center',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+  },
+  heroImgBtnText: { fontSize: 13, color: '#fff', fontWeight: '700' },
 
   /* tabs */
   tabBar: {

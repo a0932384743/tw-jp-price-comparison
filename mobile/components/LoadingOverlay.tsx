@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 
 interface Step { emoji: string; label: string; durationMs: number; }
@@ -11,7 +12,9 @@ const STEPS: Step[] = [
   { emoji: '✨', label: 'AI 生成購買建議…',    durationMs: 99999 },
 ];
 
-export default function LoadingOverlay() {
+interface Props { coldStart?: boolean; }
+
+export default function LoadingOverlay({ coldStart }: Props) {
   const [stepIdx, setStepIdx] = useState(0);
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const barAnim  = useRef(new Animated.Value(0)).current;
@@ -48,6 +51,12 @@ export default function LoadingOverlay() {
   return (
     <View style={s.overlay}>
       <View style={s.box}>
+        {coldStart && (
+          <View style={s.wakeUpBanner}>
+            <Ionicons name="cloud-outline" size={13} color="#fff" />
+            <Text style={s.wakeUpText}>後端喚醒中，請稍候…</Text>
+          </View>
+        )}
         <View style={s.dots}>
           {STEPS.map((_, i) => (
             <View key={i} style={[s.dot, i < stepIdx && s.dotDone, i === stepIdx && s.dotActive]} />
@@ -63,7 +72,7 @@ export default function LoadingOverlay() {
           <Animated.View style={[s.trackFill, { width: barWidth }]} />
         </View>
 
-        <Text style={s.hint}>通常需要 10–20 秒</Text>
+        <Text style={s.hint}>{coldStart ? '首次請求需喚醒後端，約 30 秒' : '通常需要 10–20 秒'}</Text>
       </View>
     </View>
   );
@@ -101,4 +110,10 @@ const s = StyleSheet.create({
   trackOuter: { width: '100%', height: 4, backgroundColor: Colors.border, borderRadius: 2, overflow: 'hidden' },
   trackFill:  { height: 4, backgroundColor: Colors.primary, borderRadius: 2 },
   hint:      { fontSize: 11, color: Colors.textTertiary },
+  wakeUpBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: Colors.accent, borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  wakeUpText: { fontSize: 12, color: '#fff', fontWeight: '700' },
 });

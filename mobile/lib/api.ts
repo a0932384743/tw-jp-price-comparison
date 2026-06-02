@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import type { SearchResponse } from '../types/api';
+import type { PriceHistoryPoint, SearchResponse } from '../types/api';
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
 
@@ -27,6 +27,18 @@ export async function searchByText(query: string): Promise<SearchResponse> {
   form.append('query', query);
   const res = await fetch(`${API_URL}/api/search`, { method: 'POST', body: form });
   return handleResponse(res);
+}
+
+export async function getPriceHistory(keyword: string, market: string): Promise<PriceHistoryPoint[]> {
+  try {
+    const res = await fetch(
+      `${API_URL}/api/price-history?keyword=${encodeURIComponent(keyword)}&market=${encodeURIComponent(market)}`
+    );
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
+    return [];
+  }
 }
 
 export async function searchByImage(uri: string, mimeType = 'image/jpeg'): Promise<SearchResponse> {
