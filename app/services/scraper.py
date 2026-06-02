@@ -744,16 +744,47 @@ async def _ddg_image_search(keyword: str) -> str | None:
         return None
 
 
-async def fetch_product_thumbnail(keyword: str) -> str | None:
-    """Return a product thumbnail URL – tries Bing and DuckDuckGo concurrently.
+async def _wikipedia_image(keyword: str) -> str | None:
+    """Wikipedia pageimages API – works well for famous consumer electronics."""
+    # Try both English and Chinese Wikipedia
+    for lang, title in [("en", keyword), ("zh", keyword)]:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://{lang}.wikipedia.org/w/api.php",
+                    params={
+                        "action": "query",
+                        "titles": title,
+                        "prop": "pageimages",
+                        "pithumbsize": 300,
+                        "format": "json",
+                        "redirects": 1,
+                    },
+                    headers={"User-Agent": _UA},
+                    timeout=8,
+                )
+                pages = resp.json().get("query", {}).get("pages", {})
+                for page in pages.values():
+                    src = page.get("thumbnail", {}).get("source", "")
+                    if src and src.startswith("https://"):
+                        logger.info("Wikipedia image for '%s' (%s): %s", keyword, lang, src[:80])
+                        return src
+        except Exception as exc:
+            logger.debug("Wikipedia image failed (%s) for '%s': %s", lang, keyword, exc)
+    return None
 
-    Both sources return Bing CDN URLs (tse*.mm.bing.net) which are loadable
-    from anywhere without hotlink restrictions.  Returns None on total failure
-    so it never blocks the main search pipeline.
+
+async def fetch_product_thumbnail(keyword: str) -> str | None:
+    """Return a product thumbnail URL – tries Bing, DuckDuckGo, and Wikipedia concurrently.
+
+    Bing/DDG return Bing CDN thumbnails (tse*.mm.bing.net) served without hotlink
+    restrictions.  Wikipedia returns Wikimedia Commons images for well-known products.
+    Returns None on total failure so it never blocks the main search pipeline.
     """
     results = await asyncio.gather(
         _bing_image_search(keyword),
         _ddg_image_search(keyword),
+        _wikipedia_image(keyword),
         return_exceptions=True,
     )
     for r in results:

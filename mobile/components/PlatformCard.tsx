@@ -31,7 +31,8 @@ function fmtTWD(n: number) { return `NT$${Math.round(n).toLocaleString('zh-TW')}
 function fmtJPY(n: number) { return `¥${Math.round(n).toLocaleString('ja-JP')}`; }
 
 export default function PlatformCard({ listing, market, exchangeRate, isCheapest, thumbnailUrl }: Props) {
-  const [imgError, setImgError] = useState(false);
+  const [imgError,   setImgError]   = useState(false);
+  const [imgLoaded,  setImgLoaded]  = useState(false);
   const iconName    = PLATFORM_ICONS[listing.platform] ?? 'cart-outline';
   const accentColor = market === 'TW' ? Colors.tw : Colors.jp;
 
@@ -42,11 +43,16 @@ export default function PlatformCard({ listing, market, exchangeRate, isCheapest
     if (listing.url) Linking.openURL(listing.url).catch(() => {});
   };
 
-  // Priority: per-listing image → shared product thumbnail → thum.io screenshot of listing URL
+  // Priority 1: scraped product image (per-listing)
+  // Priority 2: backend search-level thumbnail (Bing/DDG/Wikipedia)
+  // Priority 3: WordPress mshots – free screenshot service with CORS headers,
+  //   stable since 2007, maintained by Automattic. First request returns a
+  //   placeholder until the screenshot is generated and cached.
   const screenshotUrl = listing.url
-    ? `https://image.thum.io/get/width/160/crop/160/noanimate/${encodeURIComponent(listing.url)}`
+    ? `https://s0.wordpress.com/mshots/v1/${encodeURIComponent(listing.url)}?w=160`
     : null;
   const imageSource = listing.image_url || thumbnailUrl || screenshotUrl;
+  // Show placeholder icon while image is loading; hide on error
   const showImage = !!imageSource && !imgError;
 
   return (
@@ -66,18 +72,23 @@ export default function PlatformCard({ listing, market, exchangeRate, isCheapest
       <View style={styles.body}>
         <View style={styles.bodyRow}>
           {/* Thumbnail or placeholder icon */}
-          {showImage ? (
-            <Image
-              source={{ uri: imageSource! }}
-              style={styles.thumbnail}
-              resizeMode="contain"
-              onError={() => setImgError(true)}
-            />
-          ) : (
-            <View style={[styles.thumbnailPlaceholder, { backgroundColor: accentColor + '18' }]}>
-              <Ionicons name={iconName} size={26} color={accentColor} />
-            </View>
-          )}
+          <View style={styles.thumbnailWrap}>
+            {/* Always show icon; hide it once image loads successfully */}
+            {(!showImage || !imgLoaded) && (
+              <View style={[styles.thumbnailPlaceholder, { backgroundColor: accentColor + '18' }]}>
+                <Ionicons name={iconName} size={26} color={accentColor} />
+              </View>
+            )}
+            {showImage && (
+              <Image
+                source={{ uri: imageSource! }}
+                style={[styles.thumbnail, !imgLoaded && styles.hidden]}
+                resizeMode="cover"
+                onLoad={() => setImgLoaded(true)}
+                onError={() => setImgError(true)}
+              />
+            )}
+          </View>
 
           {/* Title + price */}
           <View style={styles.info}>
@@ -142,21 +153,27 @@ const styles = StyleSheet.create({
   body:    { padding: 12, gap: 10 },
   bodyRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
 
-  thumbnail: {
+  thumbnailWrap: {
     width: THUMB,
     height: THUMB,
     borderRadius: 8,
-    backgroundColor: Colors.borderLight,
+    overflow: 'hidden',
     flexShrink: 0,
+  },
+  thumbnail: {
+    position: 'absolute',
+    top: 0, left: 0,
+    width: THUMB,
+    height: THUMB,
+    borderRadius: 8,
   },
   thumbnailPlaceholder: {
     width: THUMB,
     height: THUMB,
-    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    flexShrink: 0,
   },
+  hidden: { opacity: 0 },
 
   info:    { flex: 1, gap: 4 },
   title:   { fontSize: 12, color: Colors.text, lineHeight: 18 },
