@@ -614,6 +614,104 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
         return []
 
 
+# ── Japan official APIs (free, require registration) ────────────────────────
+
+async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: str) -> list[PriceListing]:
+    """楽天市場 Ichiba Item Search API v2017 – returns reliable product images.
+
+    Free API: register at https://webservice.rakuten.co.jp/ → set RAKUTEN_APP_ID.
+    Returns mediumImageUrls (128×128 Rakuten CDN) for each item.
+    """
+    url = (
+        "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
+        f"?applicationId={app_id}&keyword={quote(keyword)}&hits=8"
+        f"&sort=standard&format=json&availability=1"
+    )
+    try:
+        resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        for wrap in data.get("Items", [])[:8]:
+            item = wrap.get("Item", wrap)
+            name = item.get("itemName", "").strip()
+            price = item.get("itemPrice", 0)
+            item_url = item.get("itemUrl", "")
+
+            # mediumImageUrls is list[{"imageUrl": "..."}]; smallImageUrls same shape
+            image_url: str | None = None
+            for key in ("mediumImageUrls", "smallImageUrls"):
+                imgs = item.get(key) or []
+                if imgs:
+                    first = imgs[0]
+                    src = first.get("imageUrl") if isinstance(first, dict) else str(first)
+                    if src and src.startswith("https://"):
+                        image_url = src
+                        break
+
+            if name and price:
+                results.append(PriceListing(
+                    platform="楽天市場",
+                    title=name,
+                    price=float(price),
+                    currency="JPY",
+                    url=item_url,
+                    image_url=image_url,
+                    data_source="scraped",
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("Rakuten API: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("Rakuten API failed for '%s': %s", keyword, exc)
+        return []
+
+
+async def _scrape_yahoo_shopping_jp_api(client: httpx.AsyncClient, keyword: str, app_id: str) -> list[PriceListing]:
+    """Yahoo!ショッピング Shopping Web Service V3 API – returns CDN product images.
+
+    Free API: register at https://developer.yahoo.co.jp/ → set YAHOO_JP_APP_ID.
+    Returns image.medium (Yahoo CDN) for each item.
+    """
+    url = (
+        "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
+        f"?appid={app_id}&query={quote(keyword)}&results=8&sort=-score"
+    )
+    try:
+        resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        for hit in data.get("hits", [])[:8]:
+            name = (hit.get("name") or "").strip()
+            price = hit.get("price", 0)
+            item_url = hit.get("url") or hit.get("externalUrl", "")
+
+            img_obj = hit.get("image") or {}
+            image_url: str | None = None
+            if isinstance(img_obj, dict):
+                src = img_obj.get("medium") or img_obj.get("small") or ""
+                if src.startswith("https://"):
+                    image_url = src
+
+            if name and price:
+                results.append(PriceListing(
+                    platform="Yahoo!ショッピング",
+                    title=name,
+                    price=float(price),
+                    currency="JPY",
+                    url=item_url,
+                    image_url=image_url,
+                    data_source="scraped",
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("Yahoo Shopping API: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("Yahoo Shopping API failed for '%s': %s", keyword, exc)
+        return []
+
+
 # ── Japan extra scrapers ─────────────────────────────────────────────────────
 
 async def _scrape_yodobashi(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
@@ -730,7 +828,14 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
 
 
 async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
-    """Return Japan listings – Rakuten + Yahoo + Amazon + Kakaku, with Gemini fallback."""
+    """Return Japan listings – official APIs first, then HTML scrapers, then Gemini fallback.
+
+    Priority:
+    1. Rakuten Ichiba API  (if RAKUTEN_APP_ID is set) → real product images
+    2. Yahoo Shopping API  (if YAHOO_JP_APP_ID is set) → real product images
+    3. HTML scrapers (Rakuten / Yahoo / Amazon / Kakaku / Yodobashi / BIC Camera)
+    4. Gemini Search fallback
+    """
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock JP prices for '%s'", keyword)
@@ -738,14 +843,28 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         return _mock_jp_prices(keyword)
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        results_per_source = await asyncio.gather(
-            _scrape_rakuten_jp(client, keyword),
-            _scrape_yahoo_shopping_jp(client, keyword),
+        # Build scraper tasks – prefer official APIs when keys are configured
+        tasks = []
+        if settings.rakuten_app_id:
+            tasks.append(_scrape_rakuten_api(client, keyword, settings.rakuten_app_id))
+            logger.debug("Using Rakuten API for '%s'", keyword)
+        else:
+            tasks.append(_scrape_rakuten_jp(client, keyword))
+
+        if settings.yahoo_jp_app_id:
+            tasks.append(_scrape_yahoo_shopping_jp_api(client, keyword, settings.yahoo_jp_app_id))
+            logger.debug("Using Yahoo Shopping API for '%s'", keyword)
+        else:
+            tasks.append(_scrape_yahoo_shopping_jp(client, keyword))
+
+        tasks += [
             _scrape_amazon_jp(client, keyword),
             _scrape_kakaku_jp(client, keyword),
             _scrape_yodobashi(client, keyword),
             _scrape_biccamera(client, keyword),
-        )
+        ]
+        results_per_source = await asyncio.gather(*tasks)
+
     combined = [r for src in results_per_source for r in src]
     for listing in combined:
         if listing.data_source is None:
@@ -758,6 +877,31 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
 
     logger.info("JP total: %d listings for '%s'", len(combined), keyword)
     return combined
+
+
+async def enrich_listing_images(listings: list[PriceListing], max_lookup: int = 4) -> None:
+    """Back-fill image_url for listings that have none, using Bing image search.
+
+    Runs up to max_lookup concurrent Bing searches so it adds minimal latency
+    (~1-2 s).  Works for any platform including Gemini-estimated listings.
+    """
+    need = [l for l in listings if not l.image_url][:max_lookup]
+    if not need:
+        return
+    imgs = await asyncio.gather(
+        *[_bing_image_search(l.title[:80]) for l in need],
+        return_exceptions=True,
+    )
+    enriched = 0
+    for listing, img in zip(need, imgs):
+        if isinstance(img, str) and img.startswith("https://"):
+            listing.image_url = img
+            enriched += 1
+    logger.info(
+        "Image enrichment: filled %d/%d missing images (total with image: %d/%d)",
+        enriched, len(need),
+        sum(1 for l in listings if l.image_url), len(listings),
+    )
 
 
 async def _bing_image_search(keyword: str) -> str | None:

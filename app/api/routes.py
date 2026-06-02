@@ -30,7 +30,7 @@ from app.schemas.product import PriceListing, SearchResponse
 from app.services.advisor import generate_buying_advice
 from app.services.ai_agent import analyze_input
 from app.services.exchange_rate import get_jpy_to_twd_rate
-from app.services.scraper import fetch_jp_prices, fetch_product_thumbnail, fetch_tw_prices
+from app.services.scraper import enrich_listing_images, fetch_jp_prices, fetch_product_thumbnail, fetch_tw_prices
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -202,17 +202,24 @@ async def search(
                 fetch_product_thumbnail(mapping.refined_tw_keyword),
             )
 
-        # ── Step 3: AI buying advice ────────────────────────────────────────
+        # ── Step 3: Enrich missing listing images via Bing ──────────────────
+        # For listings that still lack an image (e.g. Gemini-estimated results),
+        # run a quick Bing image search per title.  Limited to 4 concurrent
+        # lookups (2 TW + 2 JP) so this adds at most ~2 s.
+        await asyncio.gather(
+            enrich_listing_images(tw_prices, max_lookup=2),
+            enrich_listing_images(jp_prices, max_lookup=2),
+        )
+
+        # ── Step 4: AI buying advice ────────────────────────────────────────
         advice, rate = await generate_buying_advice(
             tw_prices, jp_prices, current_exchange_rate=live_rate
         )
 
-        # ── Step 4: Pre-warm mshots thumbnails (fire-and-forget) ────────────
-        # Kick off screenshot generation for the top listings NOW so that by
-        # the time the frontend requests /api/thumbnail the image is ready.
+        # ── Step 5: Pre-warm mshots thumbnails (fire-and-forget) ────────────
         asyncio.create_task(_prefetch_mshots(tw_prices[:4] + jp_prices[:4]))
 
-        # ── Step 5: Persist to Firestore (fire-and-forget) ──────────────────
+        # ── Step 6: Persist to Firestore (fire-and-forget) ──────────────────
         asyncio.create_task(_persist(
             input_type="image" if image else "text",
             raw_query=raw_query,
