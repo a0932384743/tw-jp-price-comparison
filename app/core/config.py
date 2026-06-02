@@ -1,16 +1,21 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    anthropic_api_key: str = ""
-    database_url: str = "postgresql+asyncpg://user:password@localhost:5432/twjp_prices"
+    gemini_api_key: str = ""
+
+    # Firebase Admin SDK – paste the full service account JSON as one line
+    firebase_service_account_json: str = ""
+    firebase_project_id: str = "adjoined-b367d"
+
     app_env: str = "development"
     app_port: int = 8000
 
-    # Exchange rate used when no live source is configured
+    # Exchange rate used when live fetch fails
     jpy_to_twd_rate: float = 0.218
 
     # Politeness delay between scraper HTTP requests (seconds)

@@ -24,6 +24,8 @@ class PriceListing(BaseModel):
     price: float = Field(description="Price in local currency (TWD or JPY)")
     currency: str = Field(default="TWD")
     url: str
+    image_url: Optional[str] = Field(default=None, description="Product thumbnail URL")
+    data_source: Optional[str] = Field(default=None, description="'scraped' | 'ai_estimated'")
 
 
 # --------------------------------------------------------------------------- #
@@ -55,3 +57,5 @@ class SearchResponse(BaseModel):
     jp_listings: list[PriceListing]
     exchange_rate_jpy_twd: float
     advice: BuyingAdvice
+    product_image_url: Optional[str] = None
+    fetched_at: Optional[str] = None
