@@ -15,6 +15,13 @@ async function handleResponse(res: Response): Promise<SearchResponse> {
   return res.json();
 }
 
+/** Build a backend-proxied thumbnail URL for a website screenshot.
+ *  The /api/thumbnail endpoint fetches via mshots server-side, so the
+ *  browser receives the image from our own origin with CORS headers. */
+export function thumbnailProxyUrl(pageUrl: string): string {
+  return `${API_URL}/api/thumbnail?url=${encodeURIComponent(pageUrl)}`;
+}
+
 export async function searchByText(query: string): Promise<SearchResponse> {
   const form = new FormData();
   form.append('query', query);

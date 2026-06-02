@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Image, Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
+import { thumbnailProxyUrl } from '../lib/api';
 import type { PriceListing } from '../types/api';
 
 interface Props {
@@ -45,12 +46,10 @@ export default function PlatformCard({ listing, market, exchangeRate, isCheapest
 
   // Priority 1: scraped product image (per-listing)
   // Priority 2: backend search-level thumbnail (Bing/DDG/Wikipedia)
-  // Priority 3: WordPress mshots – free screenshot service with CORS headers,
-  //   stable since 2007, maintained by Automattic. First request returns a
-  //   placeholder until the screenshot is generated and cached.
-  const screenshotUrl = listing.url
-    ? `https://s0.wordpress.com/mshots/v1/${encodeURIComponent(listing.url)}?w=160`
-    : null;
+  // Priority 3: backend proxy screenshot – the /api/thumbnail endpoint fetches
+  //   a mshots website screenshot server-side and returns it with CORS headers,
+  //   so the browser never has to reach a third-party domain directly.
+  const screenshotUrl = listing.url ? thumbnailProxyUrl(listing.url) : null;
   const imageSource = listing.image_url || thumbnailUrl || screenshotUrl;
   // Show placeholder icon while image is loading; hide on error
   const showImage = !!imageSource && !imgError;

@@ -4,17 +4,25 @@ FastAPI router – search endpoint.
 POST /api/search
   Accept: multipart/form-data  (field `query` for text OR `image` for file upload)
   Returns: SearchResponse JSON
+
+GET /api/thumbnail?url={url}
+  Proxy a website screenshot via mshots (server-side fetch → CORS-safe response).
+  Returns: image/jpeg or image/png with Cache-Control + CORS headers.
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import logging
-from datetime import date
+import time
+from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 from firebase_admin import firestore as fs
 from tenacity import RetryError
+
+import httpx
 
 from app.core.db import get_db, is_available
 from app.schemas.product import PriceListing, SearchResponse
@@ -206,4 +214,71 @@ async def search(
         exchange_rate_jpy_twd=rate,
         advice=advice,
         product_image_url=product_image_url,
+    )
+
+
+# ── Thumbnail proxy ──────────────────────────────────────────────────────────
+# key → (bytes, content_type, expires_at)
+_thumb_cache: dict[str, tuple[bytes, str, float]] = {}
+_THUMB_TTL = 86_400  # 24 h
+_UA_THUMB = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+@router.get(
+    "/thumbnail",
+    summary="Server-side website screenshot proxy",
+    response_description="JPEG/PNG screenshot of the given URL",
+)
+async def thumbnail_proxy(url: str = Query(..., description="Website URL to screenshot")):
+    """Fetch a website screenshot via mshots on the server side and return it
+    with proper CORS headers.  This avoids any browser-side CORS or
+    service-restriction issues the frontend would encounter when loading
+    third-party screenshot URLs directly.
+
+    Results are cached in memory for 24 hours.
+    """
+    cache_key = hashlib.md5(url.encode()).hexdigest()
+
+    # ── cache hit ────────────────────────────────────────────────────────────
+    cached = _thumb_cache.get(cache_key)
+    if cached:
+        data, ct, expires = cached
+        if time.time() < expires:
+            return Response(
+                content=data, media_type=ct,
+                headers={"Cache-Control": f"max-age={_THUMB_TTL}", "Access-Control-Allow-Origin": "*"},
+            )
+
+    # ── fetch from mshots ────────────────────────────────────────────────────
+    # mshots returns a placeholder on the first hit (screenshot is generated
+    # async).  We try up to 3 times with a short sleep to get the real image.
+    mshots = f"https://s0.wordpress.com/mshots/v1/{quote(url, safe='')}?w=280&h=280"
+    data, ct = None, "image/jpeg"
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            for attempt in range(3):
+                resp = await client.get(mshots, headers={"User-Agent": _UA_THUMB}, timeout=20)
+                if resp.status_code == 200 and resp.content:
+                    ct = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                    # mshots placeholder is tiny (<3 KB); real screenshot is larger
+                    if len(resp.content) >= 3_000:
+                        data = resp.content
+                        break
+                if attempt < 2:
+                    await asyncio.sleep(3)   # wait for mshots to generate
+    except Exception as exc:
+        logger.warning("thumbnail_proxy mshots failed for '%s': %s", url, exc)
+
+    if not data:
+        raise HTTPException(status_code=503, detail="Screenshot not yet available; retry in a few seconds")
+
+    _thumb_cache[cache_key] = (data, ct, time.time() + _THUMB_TTL)
+    return Response(
+        content=data, media_type=ct,
+        headers={"Cache-Control": f"max-age={_THUMB_TTL}", "Access-Control-Allow-Origin": "*"},
     )
