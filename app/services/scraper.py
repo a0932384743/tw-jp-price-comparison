@@ -109,8 +109,13 @@ async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceL
             name = prod.get("Name", "").strip()
             price = prod.get("Price", {}).get("P") or prod.get("Price", {}).get("M")
             prod_id = prod.get("Id", "")
-            pic = prod.get("Pic", "")
-            image_url = f"https://a.ecimg.tw/items/{pic}" if pic else None
+            pic = prod.get("Pic", "").lstrip("/")
+            # PChome Pic field may already include "items/" prefix
+            if pic:
+                base = pic if pic.startswith("items/") else f"items/{pic}"
+                image_url = f"https://a.ecimg.tw/{base}"
+            else:
+                image_url = None
             if name and price:
                 results.append(PriceListing(
                     platform="PChome 24h",
@@ -657,34 +662,66 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
     return combined
 
 
-async def fetch_product_thumbnail(keyword: str) -> str | None:
-    """Return a product thumbnail URL via DuckDuckGo Image Search.
-
-    Uses DDG's i.js JSON endpoint which returns Bing-CDN thumbnails
-    (tse*.mm.bing.net) that are freely loadable without hotlink restrictions.
-    Falls back to None on any failure so it never blocks the main pipeline.
-    """
-    query = f"{keyword} 商品"
-    headers = {
-        "User-Agent": _UA,
-        "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
-    }
+async def _bing_image_search(keyword: str) -> str | None:
+    """Bing Image Search HTML – extract Bing CDN thumbnail from a.iusc JSON."""
+    url = f"https://www.bing.com/images/search?q={quote(keyword + ' 商品')}&first=1&count=5&mkt=zh-TW&adlt=moderate"
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            # Step 1: get vqd token
+            resp = await client.get(url, headers={
+                "User-Agent": _UA,
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+            }, timeout=12)
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Primary: a.iusc elements contain JSON with turl (Bing CDN thumbnail)
+            for el in soup.select("a.iusc")[:8]:
+                try:
+                    data = json.loads(el.get("m", "{}"))
+                    turl = data.get("turl", "")
+                    if turl.startswith("https://tse"):
+                        logger.info("Bing thumbnail for '%s': %s", keyword, turl[:80])
+                        return turl
+                except (json.JSONDecodeError, AttributeError):
+                    continue
+
+            # Secondary: img elements with src
+            for img in soup.select("img.mimg[src]")[:5]:
+                src = img.get("src", "")
+                if src.startswith("https://"):
+                    logger.info("Bing img fallback for '%s': %s", keyword, src[:80])
+                    return src
+
+        logger.debug("Bing: no thumbnail for '%s'", keyword)
+        return None
+    except Exception as exc:
+        logger.warning("Bing image search failed for '%s': %s", keyword, exc)
+        return None
+
+
+async def _ddg_image_search(keyword: str) -> str | None:
+    """DuckDuckGo image search – two-step vqd token + i.js JSON."""
+    query = f"{keyword} 商品"
+    headers = {"User-Agent": _UA, "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8"}
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
             html_resp = await client.get(
                 "https://duckduckgo.com/",
                 params={"q": query, "iax": "images", "ia": "images"},
                 headers={**headers, "Accept": "text/html"},
                 timeout=10,
             )
-            vqd_match = re.search(r'vqd=(["\'])?([\d-]+)\1', html_resp.text)
+            # DDG embeds vqd as vqd='...' or vqd="..." or vqd=1234-...
+            vqd_match = (
+                re.search(r'vqd=["\']?([\d][\d\-]+[\d])["\']?', html_resp.text)
+                or re.search(r'"vqd":"([^"]+)"', html_resp.text)
+            )
             if not vqd_match:
-                logger.debug("DDG vqd not found for '%s'", keyword)
+                logger.debug("DDG vqd not found for '%s'; status=%s", keyword, html_resp.status_code)
                 return None
-            vqd = vqd_match.group(2)
+            vqd = vqd_match.group(1)
 
-            # Step 2: fetch JSON image results
             json_resp = await client.get(
                 "https://duckduckgo.com/i.js",
                 params={"q": query, "vqd": vqd, "o": "json", "s": "0", "l": "wt-wt"},
@@ -694,21 +731,34 @@ async def fetch_product_thumbnail(keyword: str) -> str | None:
             results = json_resp.json().get("results", [])
 
         for item in results[:8]:
-            # thumbnail is a Bing CDN URL – reliably accessible, no hotlink protection
             thumb = item.get("thumbnail") or item.get("image") or ""
             if thumb.startswith("https://") and "bing.net" in thumb:
-                logger.info("DDG thumbnail for '%s': %s", keyword, thumb[:80])
                 return thumb
-
-        # fallback: accept any https thumbnail
         for item in results[:8]:
             thumb = item.get("thumbnail") or item.get("image") or ""
             if thumb.startswith("https://"):
-                logger.info("DDG thumbnail (fallback) for '%s': %s", keyword, thumb[:80])
                 return thumb
-
-        logger.debug("DDG: no usable thumbnail for '%s'", keyword)
         return None
     except Exception as exc:
         logger.warning("DDG image search failed for '%s': %s", keyword, exc)
         return None
+
+
+async def fetch_product_thumbnail(keyword: str) -> str | None:
+    """Return a product thumbnail URL – tries Bing and DuckDuckGo concurrently.
+
+    Both sources return Bing CDN URLs (tse*.mm.bing.net) which are loadable
+    from anywhere without hotlink restrictions.  Returns None on total failure
+    so it never blocks the main search pipeline.
+    """
+    results = await asyncio.gather(
+        _bing_image_search(keyword),
+        _ddg_image_search(keyword),
+        return_exceptions=True,
+    )
+    for r in results:
+        if isinstance(r, str) and r.startswith("https://"):
+            logger.info("fetch_product_thumbnail '%s' → %s", keyword, r[:80])
+            return r
+    logger.warning("All image sources failed for '%s'", keyword)
+    return None

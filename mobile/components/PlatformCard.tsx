@@ -42,8 +42,11 @@ export default function PlatformCard({ listing, market, exchangeRate, isCheapest
     if (listing.url) Linking.openURL(listing.url).catch(() => {});
   };
 
-  // prefer per-listing image, fall back to search-level thumbnail
-  const imageSource = listing.image_url || thumbnailUrl || null;
+  // Priority: per-listing image → shared product thumbnail → thum.io screenshot of listing URL
+  const screenshotUrl = listing.url
+    ? `https://image.thum.io/get/width/160/crop/160/noanimate/${encodeURIComponent(listing.url)}`
+    : null;
+  const imageSource = listing.image_url || thumbnailUrl || screenshotUrl;
   const showImage = !!imageSource && !imgError;
 
   return (
