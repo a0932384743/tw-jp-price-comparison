@@ -880,28 +880,79 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
 
 
 async def enrich_listing_images(listings: list[PriceListing], max_lookup: int = 4) -> None:
-    """Back-fill image_url for listings that have none, using Bing image search.
+    """Back-fill image_url for listings that have none.
 
-    Runs up to max_lookup concurrent Bing searches so it adds minimal latency
-    (~1-2 s).  Works for any platform including Gemini-estimated listings.
+    Uses Google Custom Search API when GOOGLE_API_KEY + GOOGLE_CSE_ID are set
+    (higher quality), otherwise falls back to Bing.  Runs max_lookup concurrent
+    lookups to add minimal latency (~1-2 s).
     """
     need = [l for l in listings if not l.image_url][:max_lookup]
     if not need:
         return
-    imgs = await asyncio.gather(
-        *[_bing_image_search(l.title[:80]) for l in need],
-        return_exceptions=True,
-    )
+
+    settings = get_settings()
+    use_google = bool(settings.google_api_key and settings.google_cse_id)
+
+    async def _lookup(title: str) -> str | None:
+        if use_google:
+            result = await _google_image_search(title[:80], settings.google_api_key, settings.google_cse_id)
+            if result:
+                return result
+        return await _bing_image_search(title[:80])
+
+    imgs = await asyncio.gather(*[_lookup(l.title) for l in need], return_exceptions=True)
     enriched = 0
     for listing, img in zip(need, imgs):
         if isinstance(img, str) and img.startswith("https://"):
             listing.image_url = img
             enriched += 1
     logger.info(
-        "Image enrichment: filled %d/%d missing images (total with image: %d/%d)",
+        "Image enrichment (%s): filled %d/%d missing (total %d/%d)",
+        "Google" if use_google else "Bing",
         enriched, len(need),
         sum(1 for l in listings if l.image_url), len(listings),
     )
+
+
+async def _google_image_search(keyword: str, api_key: str, cse_id: str) -> str | None:
+    """Google Custom Search API – image search.
+
+    Official API; returns high-quality product images.
+    Free tier: 100 queries/day.  Requires:
+      1. Create a Custom Search Engine at https://programmablesearch.google.com/
+         (search entire web, enable "Image search" in Settings → Search features)
+      2. Get an API key at https://console.developers.google.com/
+      3. Set GOOGLE_API_KEY and GOOGLE_CSE_ID in Render env vars.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://www.googleapis.com/customsearch/v1",
+                params={
+                    "key": api_key,
+                    "cx": cse_id,
+                    "q": keyword,
+                    "searchType": "image",
+                    "imgSize": "medium",
+                    "imgType": "photo",
+                    "num": 3,
+                    "safe": "active",
+                },
+                timeout=10,
+            )
+            if resp.status_code == 429:
+                logger.warning("Google CSE daily quota reached; falling back to Bing")
+                return None
+            resp.raise_for_status()
+            for item in resp.json().get("items", []):
+                link = item.get("link", "")
+                if link.startswith("https://"):
+                    logger.info("Google image for '%s': %s", keyword, link[:80])
+                    return link
+        return None
+    except Exception as exc:
+        logger.warning("Google image search failed for '%s': %s", keyword, exc)
+        return None
 
 
 async def _bing_image_search(keyword: str) -> str | None:
@@ -1017,12 +1068,23 @@ async def _wikipedia_image(keyword: str) -> str | None:
 
 
 async def fetch_product_thumbnail(keyword: str) -> str | None:
-    """Return a product thumbnail URL – tries Bing, DuckDuckGo, and Wikipedia concurrently.
+    """Return a product thumbnail URL.
 
-    Bing/DDG return Bing CDN thumbnails (tse*.mm.bing.net) served without hotlink
-    restrictions.  Wikipedia returns Wikimedia Commons images for well-known products.
-    Returns None on total failure so it never blocks the main search pipeline.
+    Priority:
+    1. Google Custom Search API (if GOOGLE_API_KEY + GOOGLE_CSE_ID are set) –
+       official API, highest quality, 100 free queries/day
+    2. Bing Image Search HTML + DuckDuckGo + Wikipedia – concurrent, no key needed
+    Returns None on total failure so it never blocks the main pipeline.
     """
+    settings = get_settings()
+
+    # Prefer Google when API credentials are configured
+    if settings.google_api_key and settings.google_cse_id:
+        result = await _google_image_search(keyword, settings.google_api_key, settings.google_cse_id)
+        if result:
+            return result
+
+    # Concurrent Bing / DDG / Wikipedia fallback
     results = await asyncio.gather(
         _bing_image_search(keyword),
         _ddg_image_search(keyword),

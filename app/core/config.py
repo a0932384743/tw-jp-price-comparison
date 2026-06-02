@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     # Japan tax-free refund rate applied for physical JP shopping
     jp_tax_free_rate: float = 0.10
 
+    # Optional: Google Custom Search API for product images
+    # Setup: https://programmablesearch.google.com/ (enable Image Search) +
+    #        https://console.developers.google.com/ (get API key)
+    # Free tier: 100 queries/day
+    google_api_key: str = ""
+    google_cse_id: str = ""
+
     # Optional: Rakuten Ichiba API (free – register at https://webservice.rakuten.co.jp/)
     rakuten_app_id: str = ""
 
