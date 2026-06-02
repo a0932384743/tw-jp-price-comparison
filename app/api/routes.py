@@ -122,6 +122,28 @@ async def _persist(
     await asyncio.to_thread(_write)
 
 
+async def _prefetch_mshots(listings: list[PriceListing]) -> None:
+    """Fire mshots requests for each listing URL so that by the time the
+    frontend calls /api/thumbnail the screenshot is already cached."""
+    urls = [l.url for l in listings if l.url]
+    if not urls:
+        return
+    mshots_headers = {"User-Agent": _UA_THUMB}
+    async with httpx.AsyncClient(follow_redirects=False) as client:
+        await asyncio.gather(
+            *[
+                client.get(
+                    f"https://s0.wordpress.com/mshots/v1/{quote(u, safe='')}?w=280&h=280",
+                    headers=mshots_headers,
+                    timeout=10,
+                )
+                for u in urls
+            ],
+            return_exceptions=True,
+        )
+    logger.info("mshots prefetch done for %d URLs", len(urls))
+
+
 # ── Search endpoint ──────────────────────────────────────────────────────────
 
 @router.post(
@@ -185,7 +207,12 @@ async def search(
             tw_prices, jp_prices, current_exchange_rate=live_rate
         )
 
-        # ── Step 4: Persist to Firestore (fire-and-forget) ──────────────────
+        # ── Step 4: Pre-warm mshots thumbnails (fire-and-forget) ────────────
+        # Kick off screenshot generation for the top listings NOW so that by
+        # the time the frontend requests /api/thumbnail the image is ready.
+        asyncio.create_task(_prefetch_mshots(tw_prices[:4] + jp_prices[:4]))
+
+        # ── Step 5: Persist to Firestore (fire-and-forget) ──────────────────
         asyncio.create_task(_persist(
             input_type="image" if image else "text",
             raw_query=raw_query,
@@ -235,12 +262,13 @@ _UA_THUMB = (
     response_description="JPEG/PNG screenshot of the given URL",
 )
 async def thumbnail_proxy(url: str = Query(..., description="Website URL to screenshot")):
-    """Fetch a website screenshot via mshots on the server side and return it
-    with proper CORS headers.  This avoids any browser-side CORS or
-    service-restriction issues the frontend would encounter when loading
-    third-party screenshot URLs directly.
+    """Return a mshots website screenshot with CORS headers.
 
-    Results are cached in memory for 24 hours.
+    Uses follow_redirects=False: mshots returns 302 while still generating the
+    screenshot (and would redirect to a "Generating Preview" placeholder).
+    We treat 302 as "not ready" and return 503 so the frontend falls back to
+    the icon placeholder.  On subsequent requests the cached screenshot is
+    returned immediately as 200.
     """
     cache_key = hashlib.md5(url.encode()).hexdigest()
 
@@ -254,32 +282,27 @@ async def thumbnail_proxy(url: str = Query(..., description="Website URL to scre
                 headers={"Cache-Control": f"max-age={_THUMB_TTL}", "Access-Control-Allow-Origin": "*"},
             )
 
-    # ── fetch from mshots ────────────────────────────────────────────────────
-    # mshots returns a placeholder on the first hit (screenshot is generated
-    # async).  We try up to 3 times with a short sleep to get the real image.
+    # ── fetch from mshots (no redirect following) ────────────────────────────
+    # 302 = screenshot still generating → return 503, frontend shows icon.
+    # 200 = screenshot ready → cache and return.
     mshots = f"https://s0.wordpress.com/mshots/v1/{quote(url, safe='')}?w=280&h=280"
-    data, ct = None, "image/jpeg"
-
     try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            for attempt in range(3):
-                resp = await client.get(mshots, headers={"User-Agent": _UA_THUMB}, timeout=20)
-                if resp.status_code == 200 and resp.content:
-                    ct = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
-                    # mshots placeholder is tiny (<3 KB); real screenshot is larger
-                    if len(resp.content) >= 3_000:
-                        data = resp.content
-                        break
-                if attempt < 2:
-                    await asyncio.sleep(3)   # wait for mshots to generate
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            resp = await client.get(mshots, headers={"User-Agent": _UA_THUMB}, timeout=15)
     except Exception as exc:
-        logger.warning("thumbnail_proxy mshots failed for '%s': %s", url, exc)
+        logger.warning("thumbnail_proxy request failed for '%s': %s", url, exc)
+        raise HTTPException(status_code=503, detail="Screenshot service unreachable")
 
-    if not data:
-        raise HTTPException(status_code=503, detail="Screenshot not yet available; retry in a few seconds")
+    if resp.status_code in (301, 302, 307, 308):
+        # mshots is still rendering – tell the frontend to use the icon instead
+        raise HTTPException(status_code=503, detail="Screenshot generating, retry later")
 
-    _thumb_cache[cache_key] = (data, ct, time.time() + _THUMB_TTL)
-    return Response(
-        content=data, media_type=ct,
-        headers={"Cache-Control": f"max-age={_THUMB_TTL}", "Access-Control-Allow-Origin": "*"},
-    )
+    if resp.status_code == 200 and resp.content:
+        ct = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        _thumb_cache[cache_key] = (resp.content, ct, time.time() + _THUMB_TTL)
+        return Response(
+            content=resp.content, media_type=ct,
+            headers={"Cache-Control": f"max-age={_THUMB_TTL}", "Access-Control-Allow-Origin": "*"},
+        )
+
+    raise HTTPException(status_code=503, detail="Screenshot unavailable")
