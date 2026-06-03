@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # Japan tax-free refund rate applied for physical JP shopping
     jp_tax_free_rate: float = 0.10
 
+    # Optional: SerpApi key for Google Images search
+    # Get key at https://serpapi.com/ (100 free searches/month)
+    serpapi_key: str = ""
+
     # Optional: Google Custom Search API for product images
     # Setup: https://programmablesearch.google.com/ (enable Image Search) +
     #        https://console.developers.google.com/ (get API key)

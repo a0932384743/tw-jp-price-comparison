@@ -894,6 +894,10 @@ async def enrich_listing_images(listings: list[PriceListing], max_lookup: int = 
     use_google = bool(settings.google_api_key and settings.google_cse_id)
 
     async def _lookup(title: str) -> str | None:
+        if settings.serpapi_key:
+            result = await _serpapi_image_search(title[:80], settings.serpapi_key)
+            if result:
+                return result
         if use_google:
             result = await _google_image_search(title[:80], settings.google_api_key, settings.google_cse_id)
             if result:
@@ -912,6 +916,41 @@ async def enrich_listing_images(listings: list[PriceListing], max_lookup: int = 
         enriched, len(need),
         sum(1 for l in listings if l.image_url), len(listings),
     )
+
+
+async def _serpapi_image_search(keyword: str, api_key: str) -> str | None:
+    """Google Images via SerpApi REST endpoint (no SDK needed).
+
+    Free plan: 100 searches/month.  Set SERPAPI_KEY in Render env vars.
+    Docs: https://serpapi.com/images-results
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://serpapi.com/search.json",
+                params={
+                    "engine": "google_images",
+                    "q": keyword,
+                    "api_key": api_key,
+                    "num": 5,
+                    "safe": "active",
+                    "hl": "zh-tw",
+                },
+                timeout=12,
+            )
+            if resp.status_code == 429:
+                logger.warning("SerpApi rate limit reached")
+                return None
+            resp.raise_for_status()
+            for item in resp.json().get("images_results", []):
+                thumb = item.get("thumbnail") or item.get("original") or ""
+                if thumb.startswith("https://"):
+                    logger.info("SerpApi image for '%s': %s", keyword, thumb[:80])
+                    return thumb
+        return None
+    except Exception as exc:
+        logger.warning("SerpApi image search failed for '%s': %s", keyword, exc)
+        return None
 
 
 async def _google_image_search(keyword: str, api_key: str, cse_id: str) -> str | None:
@@ -1078,13 +1117,19 @@ async def fetch_product_thumbnail(keyword: str) -> str | None:
     """
     settings = get_settings()
 
-    # Prefer Google when API credentials are configured
+    # Priority 1: SerpApi Google Images (100 free/month, best quality)
+    if settings.serpapi_key:
+        result = await _serpapi_image_search(keyword, settings.serpapi_key)
+        if result:
+            return result
+
+    # Priority 2: Google Custom Search API (100 free/day)
     if settings.google_api_key and settings.google_cse_id:
         result = await _google_image_search(keyword, settings.google_api_key, settings.google_cse_id)
         if result:
             return result
 
-    # Concurrent Bing / DDG / Wikipedia fallback
+    # Priority 3: Concurrent Bing / DDG / Wikipedia fallback (no key needed)
     results = await asyncio.gather(
         _bing_image_search(keyword),
         _ddg_image_search(keyword),
