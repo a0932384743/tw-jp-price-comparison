@@ -161,7 +161,12 @@ async def search(
             detail="Provide either `query` (text) or `image` (file).",
         )
 
+    input_label = f"image:{image.filename}" if image else f"text:{query!r}"
+    logger.info("▶ Search start — %s", input_label)
+    pipeline_start = time.perf_counter()
+
     # ── Step 1: AI keyword mapping ──────────────────────────────────────────
+    t0 = time.perf_counter()
     try:
         if image:
             image_bytes = await image.read()
@@ -178,8 +183,16 @@ async def search(
         raise HTTPException(status_code=429, detail=f"AI服務暫時無法使用: {last_exc}")
     except RuntimeError as e:
         raise HTTPException(status_code=429, detail=str(e))
+    logger.info(
+        "  [1/4] AI keyword mapping      %.2fs → TW=%s | JP=%s | category=%s",
+        time.perf_counter() - t0,
+        mapping.refined_tw_keyword,
+        mapping.refined_jp_keyword,
+        mapping.category,
+    )
 
     # ── Step 2: Live exchange rate + price fetching (with Firestore cache) ──
+    t0 = time.perf_counter()
     try:
         live_rate, cached_tw, cached_jp = await asyncio.gather(
             get_jpy_to_twd_rate(),
@@ -192,34 +205,54 @@ async def search(
 
         if tw_was_cached and jp_was_cached:
             tw_prices, jp_prices = cached_tw, cached_jp
-            logger.info("Firestore cache hit: TW=%s / JP=%s",
-                        mapping.refined_tw_keyword, mapping.refined_jp_keyword)
             product_image_url = await fetch_product_thumbnail(mapping.refined_tw_keyword)
+            logger.info(
+                "  [2/4] Price fetch (Firestore cache hit) %.2fs → TW=%d | JP=%d | rate=%.4f",
+                time.perf_counter() - t0,
+                len(tw_prices), len(jp_prices), live_rate,
+            )
         else:
             tw_prices, jp_prices, product_image_url = await asyncio.gather(
                 fetch_tw_prices(mapping.refined_tw_keyword),
                 fetch_jp_prices(mapping.refined_jp_keyword),
                 fetch_product_thumbnail(mapping.refined_tw_keyword),
             )
+            logger.info(
+                "  [2/4] Price fetch (live scrape)         %.2fs → TW=%d | JP=%d | rate=%.4f | img=%s",
+                time.perf_counter() - t0,
+                len(tw_prices), len(jp_prices), live_rate,
+                "✓" if product_image_url else "✗",
+            )
 
-        # ── Step 3: Enrich missing listing images via Bing ──────────────────
-        # For listings that still lack an image (e.g. Gemini-estimated results),
-        # run a quick Bing image search per title.  Limited to 4 concurrent
-        # lookups (2 TW + 2 JP) so this adds at most ~2 s.
+        # ── Step 3: Enrich missing listing images ───────────────────────────
+        t0 = time.perf_counter()
+        tw_missing = sum(1 for l in tw_prices if not l.image_url)
+        jp_missing = sum(1 for l in jp_prices if not l.image_url)
         await asyncio.gather(
             enrich_listing_images(tw_prices, max_lookup=2),
             enrich_listing_images(jp_prices, max_lookup=2),
         )
+        tw_filled = tw_missing - sum(1 for l in tw_prices if not l.image_url)
+        jp_filled = jp_missing - sum(1 for l in jp_prices if not l.image_url)
+        logger.info(
+            "  [3/4] Image enrichment                  %.2fs → filled TW=%d/%d | JP=%d/%d",
+            time.perf_counter() - t0,
+            tw_filled, tw_missing, jp_filled, jp_missing,
+        )
 
         # ── Step 4: AI buying advice ────────────────────────────────────────
+        t0 = time.perf_counter()
         advice, rate = await generate_buying_advice(
             tw_prices, jp_prices, current_exchange_rate=live_rate
         )
+        logger.info(
+            "  [4/4] Buying advice                     %.2fs → best_deal=%s",
+            time.perf_counter() - t0,
+            advice.best_deal_location,
+        )
 
-        # ── Step 5: Pre-warm mshots thumbnails (fire-and-forget) ────────────
+        # ── Fire-and-forget tasks ────────────────────────────────────────────
         asyncio.create_task(_prefetch_mshots(tw_prices[:4] + jp_prices[:4]))
-
-        # ── Step 6: Persist to Firestore (fire-and-forget) ──────────────────
         asyncio.create_task(_persist(
             input_type="image" if image else "text",
             raw_query=raw_query,
@@ -241,6 +274,12 @@ async def search(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Pipeline error: {exc}",
         )
+
+    total = time.perf_counter() - pipeline_start
+    logger.info(
+        "◀ Search done  %.2fs — TW=%d listings | JP=%d listings | deal=%s",
+        total, len(tw_prices), len(jp_prices), advice.best_deal_location,
+    )
 
     return SearchResponse(
         keyword_mapping=mapping,
