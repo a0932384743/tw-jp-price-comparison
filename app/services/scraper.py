@@ -38,18 +38,19 @@ _HEADERS_JP = {"User-Agent": _UA, "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"}
 
 # ── Price outlier filter ─────────────────────────────────────────────────────
 
-def _filter_outliers(listings: list[PriceListing], min_ratio: float = 0.35) -> list[PriceListing]:
-    """Remove listings whose price is far below the group median.
+def _filter_outliers(listings: list[PriceListing], min_ratio: float = 0.40) -> list[PriceListing]:
+    """Remove listings whose price is far below the group median (likely accessories/unrelated).
 
-    Accessories and unrelated products tend to be much cheaper than the
-    actual searched item. Keeping only items >= median * min_ratio removes
-    the most obvious outliers while preserving genuine price variation.
+    Uses min_ratio=0.40: keeps items priced at ≥40% of median, so accessories
+    costing a fraction of the main product are excluded while genuine bargains remain.
+    Results are returned sorted by price ascending so the cheapest appears first.
     """
     if len(listings) <= 1:
-        return listings
+        return sorted(listings, key=lambda l: l.price)
     prices = sorted(l.price for l in listings)
     median = prices[len(prices) // 2]
-    return [l for l in listings if l.price >= median * min_ratio]
+    filtered = [l for l in listings if l.price >= median * min_ratio]
+    return sorted(filtered, key=lambda l: l.price)
 
 
 # ── Mock helpers (development only) ─────────────────────────────────────────
@@ -101,10 +102,10 @@ def _mock_jp_prices(keyword: str) -> list[PriceListing]:
 # ── Taiwan live scrapers ─────────────────────────────────────────────────────
 
 async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
-    """PChome 24h JSON search API – no authentication required."""
+    """PChome 24h JSON search API – sorted by price ascending to get cheapest first."""
     url = (
         f"https://ecshweb.pchome.com.tw/search/v3.3/all/results"
-        f"?q={quote(keyword)}&page=1&sort=rnk/dc"
+        f"?q={quote(keyword)}&page=1&sort=price/ac"
     )
     try:
         resp = await client.get(url, headers=_HEADERS_TW, timeout=15)
@@ -205,8 +206,9 @@ async def _scrape_shopee_tw(client: httpx.AsyncClient, keyword: str) -> list[Pri
         for entry in items[:8]:
             item = entry.get("item_basic") or entry
             name = (item.get("name") or "").strip()
-            # Shopee prices are in "cents" (TWD * 100000)
-            price_raw = item.get("price") or item.get("price_min") or 0
+            # Shopee prices are in "cents" (TWD * 100000).
+            # Use price_min first – for multi-variant items this is the cheapest option.
+            price_raw = item.get("price_min") or item.get("price") or 0
             price = float(price_raw) / 100000 if price_raw > 100000 else float(price_raw)
             item_id = item.get("itemid") or item.get("item_id", "")
             shop_id = item.get("shopid") or item.get("shop_id", "")
@@ -538,30 +540,38 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
 
     if market == "TW":
         prompt = (
-            f'Search Google Shopping and Google Search for the current retail price of '
+            f'Search Google Shopping and Google Search for the LOWEST current retail price of '
             f'"{keyword}" in Taiwan (台灣).\n'
             f"Check these platforms: PChome 24h, momo購物網, 蝦皮購物(Shopee), "
             f"Yahoo購物中心, 燦坤, 博客來.\n\n"
-            f"IMPORTANT: Only include results for the EXACT product \"{keyword}\", "
-            f"not accessories or unrelated items. Prices must be in TWD and realistic.\n\n"
+            f"CRITICAL RULES:\n"
+            f"1. Report the LOWEST available price at each platform (cheapest variant/promotion).\n"
+            f"2. Only include the EXACT product \"{keyword}\" – no accessories, cases, or bundles.\n"
+            f"3. If the product has variants (color/storage/size), use the cheapest variant price.\n"
+            f"4. Prices must be in TWD and reflect what a buyer pays at checkout (before shipping).\n"
+            f"5. Use the most recently observed price – do not guess outdated prices.\n\n"
             f"Return ONLY a JSON array with NO url field (no markdown, no explanation):\n"
             f'[{{"platform":"PChome 24h","title":"exact full product name","price":9490,'
             f'"currency":"TWD"}}]\n\n'
-            f"Include 4-6 results from different stores."
+            f"Include 4-6 results from different stores, sorted cheapest first."
         )
         currency = "TWD"
     else:
         prompt = (
-            f'Search Google Shopping and Google Search for the current retail price of '
+            f'Search Google Shopping and Google Search for the LOWEST current retail price of '
             f'"{keyword}" in Japan (日本).\n'
             f"Check these platforms: 楽天市場, Yahoo!ショッピング, Amazon.co.jp, "
             f"ヨドバシカメラ, ビックカメラ, 価格.com.\n\n"
-            f"IMPORTANT: Only include results for the EXACT product \"{keyword}\", "
-            f"not accessories. Prices must be in JPY and realistic.\n\n"
+            f"CRITICAL RULES:\n"
+            f"1. Report the LOWEST available price at each platform (cheapest variant/promotion).\n"
+            f"2. Only include the EXACT product \"{keyword}\" – no accessories or bundles.\n"
+            f"3. If the product has variants (color/storage/capacity), use the cheapest variant.\n"
+            f"4. Prices must be in JPY (tax-included) and reflect the actual checkout price.\n"
+            f"5. Use the most recently observed price – do not guess outdated prices.\n\n"
             f"Return ONLY a JSON array with NO url field (no markdown, no explanation):\n"
             f'[{{"platform":"楽天市場","title":"exact full product name","price":37980,'
             f'"currency":"JPY"}}]\n\n'
-            f"Include 4-6 results from different stores."
+            f"Include 4-6 results from different stores, sorted cheapest first."
         )
         currency = "JPY"
 
@@ -607,6 +617,7 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
                     url=_platform_search_url(platform, keyword),
                     data_source="ai_estimated",
                 ))
+        results.sort(key=lambda l: l.price)
         logger.info("Gemini fallback (%s): %d results for '%s'", market, len(results), keyword)
         return results
     except (json.JSONDecodeError, ValueError) as exc:
@@ -625,7 +636,7 @@ async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: s
     url = (
         "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
         f"?applicationId={app_id}&keyword={quote(keyword)}&hits=8"
-        f"&sort=standard&format=json&availability=1"
+        f"&sort=%2BitemPrice&format=json&availability=1"
     )
     try:
         resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
@@ -675,7 +686,7 @@ async def _scrape_yahoo_shopping_jp_api(client: httpx.AsyncClient, keyword: str,
     """
     url = (
         "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
-        f"?appid={app_id}&query={quote(keyword)}&results=8&sort=-score"
+        f"?appid={app_id}&query={quote(keyword)}&results=8&sort=%2Bprice"
     )
     try:
         resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
@@ -817,13 +828,14 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
     for listing in combined:
         if listing.data_source is None:
             listing.data_source = "scraped"
+    combined.sort(key=lambda l: l.price)
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
         logger.warning("All TW scrapers failed for '%s', falling back to Gemini Search", keyword)
         combined = await _fallback_prices_via_gemini(keyword, "TW")
 
-    logger.info("TW total: %d listings for '%s'", len(combined), keyword)
+    logger.info("TW total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
 
 
@@ -875,7 +887,8 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         logger.warning("All JP scrapers failed for '%s', falling back to Gemini Search", keyword)
         combined = await _fallback_prices_via_gemini(keyword, "JP")
 
-    logger.info("JP total: %d listings for '%s'", len(combined), keyword)
+    combined.sort(key=lambda l: l.price)
+    logger.info("JP total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
 
 
