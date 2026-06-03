@@ -213,7 +213,8 @@ async def _scrape_shopee_tw(client: httpx.AsyncClient, keyword: str) -> list[Pri
             item_id = item.get("itemid") or item.get("item_id", "")
             shop_id = item.get("shopid") or item.get("shop_id", "")
             img_hash = item.get("image") or (item.get("images") or [None])[0]
-            image_url = f"https://cf.shopee.tw/file/{img_hash}_tn" if img_hash else None
+            # Use full CDN URL (no suffix = original quality); _tn is only 100×100
+            image_url = f"https://cf.shopee.tw/file/{img_hash}" if img_hash else None
             if name and price > 1:
                 results.append(PriceListing(
                     platform="蝦皮購物",

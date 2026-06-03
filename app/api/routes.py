@@ -224,6 +224,14 @@ async def search(
                 "✓" if product_image_url else "✗",
             )
 
+        # If the dedicated thumbnail fetch came up empty, reuse the best API listing image.
+        if not product_image_url:
+            product_image_url = next(
+                (l.image_url for l in tw_prices + jp_prices if l.image_url), None
+            )
+            if product_image_url:
+                logger.info("  product_image_url → fallback from listing image")
+
         # ── Step 3: Enrich missing listing images ───────────────────────────
         t0 = time.perf_counter()
         tw_missing = sum(1 for l in tw_prices if not l.image_url)
