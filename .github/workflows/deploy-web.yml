@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - claude/tw-jp-price-comparison-ai-DhwkP
-      - main
     paths:
       - 'mobile/**'
       - '.github/workflows/deploy-web.yml'
