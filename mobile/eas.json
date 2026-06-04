@@ -1,6 +1,7 @@
 {
   "cli": {
-    "version": ">= 16.0.0"
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
@@ -11,13 +12,15 @@
       "distribution": "internal",
       "android": { "buildType": "apk" },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://tw-jp-price-api.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://tw-jp-price-api.onrender.com",
+        "EAS_BUILD_NO_EXPO_GO_WARNING": "true"
       }
     },
     "production": {
       "android": { "buildType": "app-bundle" },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://tw-jp-price-api.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://tw-jp-price-api.onrender.com",
+        "EAS_BUILD_NO_EXPO_GO_WARNING": "true"
       }
     }
   },
