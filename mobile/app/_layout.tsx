@@ -1,6 +1,6 @@
 import React from 'react';
-import { Platform, Share, TouchableOpacity } from 'react-native';
-import { Stack, useRouter } from 'expo-router';
+import { Share, TouchableOpacity } from 'react-native';
+import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { getLastResult } from '../lib/store';

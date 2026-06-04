@@ -1,0 +1,81 @@
+name: EAS Build & Submit
+
+# Triggered on main when mobile code changes, or manually.
+# Set EXPO_TOKEN in GitHub Secrets (expo.dev → Account Settings → Access Tokens).
+#
+# For store submission you also need:
+#   Android: GOOGLE_SERVICE_ACCOUNT_KEY (JSON content of Play Console service account)
+#   iOS:     Apple credentials stored in EAS (run `eas credentials` locally once)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/eas-build.yml'
+  workflow_dispatch:
+    inputs:
+      submit:
+        description: 'Submit to stores after build? (requires store credentials)'
+        type: boolean
+        default: false
+      platform:
+        description: 'Platform to build'
+        type: choice
+        options: [all, android, ios]
+        default: all
+
+jobs:
+  build:
+    name: EAS Build (${{ github.event.inputs.platform || 'all' }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: npm install --legacy-peer-deps
+
+      - name: Lint
+        working-directory: mobile
+        run: npm run lint
+
+      - name: Tests
+        working-directory: mobile
+        run: npm run test:ci
+
+      - name: EAS Build
+        working-directory: mobile
+        run: |
+          eas build \
+            --platform ${{ github.event.inputs.platform || 'all' }} \
+            --profile production \
+            --non-interactive
+
+      - name: Submit to stores
+        if: ${{ github.event.inputs.submit == 'true' }}
+        working-directory: mobile
+        run: |
+          eas submit \
+            --platform ${{ github.event.inputs.platform || 'all' }} \
+            --profile production \
+            --non-interactive
+        env:
+          # Android: base64-encoded Google Play service account JSON
+          # Set via: GitHub → Settings → Secrets → GOOGLE_SERVICE_ACCOUNT_KEY
+          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}

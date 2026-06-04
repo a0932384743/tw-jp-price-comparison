@@ -1,10 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Image,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,7 +11,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
@@ -47,14 +45,9 @@ export default function SearchScreen() {
   const [loading, setLoading]       = useState(false);
   const [coldStart, setColdStart]   = useState(false);
   const [error, setError]           = useState<string | null>(null);
-  const [history, setHistory]       = useState<HistoryItem[]>([]);
-  const [favorites, setFavorites]   = useState<FavoriteItem[]>([]);
+  const [history, setHistory]       = useState<HistoryItem[]>(() => getHistory());
+  const [favorites, setFavorites]   = useState<FavoriteItem[]>(() => getFavorites());
   const coldStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    setHistory(getHistory());
-    setFavorites(getFavorites());
-  }, []);
 
   const refreshHistory = useCallback(() => setHistory(getHistory()), []);
   const refreshFavorites = useCallback(() => setFavorites(getFavorites()), []);

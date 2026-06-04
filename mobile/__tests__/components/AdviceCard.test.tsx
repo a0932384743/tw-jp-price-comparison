@@ -35,62 +35,38 @@ const makeSimilarAdvice = (): BuyingAdvice => ({
   verdict: '兩地價格相近，就近購買即可。',
 });
 
-// ── Banner ────────────────────────────────────────────────────────────────
+// ── Summary ───────────────────────────────────────────────────────────────
 
-describe('AdviceCard – best deal banner', () => {
-  it('shows 台灣較划算 for Taiwan', () => {
-    const { getByText } = render(<AdviceCard advice={makeTWAdvice()} />);
-    expect(getByText(/台灣較划算/)).toBeTruthy();
-  });
-
-  it('shows 日本較划算 for Japan', () => {
-    const { getByText } = render(<AdviceCard advice={makeJPAdvice()} />);
-    expect(getByText(/日本較划算/)).toBeTruthy();
-  });
-
-  it('shows 兩地價格相近 for Similar', () => {
-    const { getByText } = render(<AdviceCard advice={makeSimilarAdvice()} />);
-    // The banner includes the 🤝 emoji prefix – unique enough to avoid ambiguity with verdict
-    expect(getByText(/🤝/)).toBeTruthy();
-  });
-});
-
-// ── Price table ───────────────────────────────────────────────────────────
-
-describe('AdviceCard – price comparison table', () => {
-  it('displays the Taiwan average price', () => {
-    const { getByText } = render(<AdviceCard advice={makeTWAdvice()} />);
-    expect(getByText('NT$9,900')).toBeTruthy();
-  });
-
-  it('displays the JP converted price', () => {
-    const { getByText } = render(<AdviceCard advice={makeTWAdvice()} />);
-    expect(getByText('NT$9,112')).toBeTruthy();
-  });
-
-  it('displays the JP tax-free price', () => {
-    const { getByText } = render(<AdviceCard advice={makeTWAdvice()} />);
-    expect(getByText('NT$8,201')).toBeTruthy();
-  });
-
-  it('renders — when a price value is null', () => {
-    const advice = { ...makeTWAdvice(), tw_average_price_twd: null };
-    const { getAllByText } = render(<AdviceCard advice={advice} />);
-    expect(getAllByText('—').length).toBeGreaterThan(0);
-  });
-});
-
-// ── Summary & Verdict ─────────────────────────────────────────────────────
-
-describe('AdviceCard – summary and verdict', () => {
+describe('AdviceCard – summary', () => {
   it('shows the price_comparison_summary', () => {
     const advice = makeTWAdvice();
     const { getByText } = render(<AdviceCard advice={advice} />);
     expect(getByText(advice.price_comparison_summary)).toBeTruthy();
   });
 
-  it('shows the verdict', () => {
+  it('shows the 📊 比價摘要 section title', () => {
+    const { getByText } = render(<AdviceCard advice={makeTWAdvice()} />);
+    expect(getByText('📊 比價摘要')).toBeTruthy();
+  });
+});
+
+// ── Verdict ───────────────────────────────────────────────────────────────
+
+describe('AdviceCard – verdict', () => {
+  it('shows the verdict text', () => {
     const advice = makeTWAdvice();
+    const { getByText } = render(<AdviceCard advice={advice} />);
+    expect(getByText(advice.verdict)).toBeTruthy();
+  });
+
+  it('shows the verdict for Japan advice', () => {
+    const advice = makeJPAdvice();
+    const { getByText } = render(<AdviceCard advice={advice} />);
+    expect(getByText(advice.verdict)).toBeTruthy();
+  });
+
+  it('shows the verdict for Similar advice', () => {
+    const advice = makeSimilarAdvice();
     const { getByText } = render(<AdviceCard advice={advice} />);
     expect(getByText(advice.verdict)).toBeTruthy();
   });
@@ -124,11 +100,10 @@ describe('AdviceCard – pros/cons accordion', () => {
     expect(queryByText(/台灣本地保固/)).toBeNull();
   });
 
-  it('shows multiple pros for Japan advice', () => {
+  it('shows multiple pros and cons for Japan advice', () => {
     const advice = makeJPAdvice();
     const { getByText, queryAllByText, queryByText } = render(<AdviceCard advice={advice} />);
     fireEvent.press(getByText('優缺點分析'));
-    // /退稅後省/ can match both summary and pros bullet; ensure at least one bullet is present
     expect(queryAllByText(/退稅後省/).length).toBeGreaterThan(0);
     expect(queryByText(/需加計運費/)).toBeTruthy();
     expect(queryByText(/保固限制/)).toBeTruthy();

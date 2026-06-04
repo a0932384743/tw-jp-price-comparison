@@ -81,7 +81,7 @@ export default function PlatformCard({ listing, market, exchangeRate, isCheapest
           <View style={styles.thumbnailWrap}>
             {/* Always show icon; hide it once image loads successfully */}
             {(!showImage || !imgLoaded) && (
-              <View style={[styles.thumbnailPlaceholder, { backgroundColor: accentColor + '18' }]}>
+              <View style={[styles.thumbnailPlaceholder, { backgroundColor: `${accentColor}18` }]}>
                 <Ionicons name={iconName} size={26} color={accentColor} />
               </View>
             )}
