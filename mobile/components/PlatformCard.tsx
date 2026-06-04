@@ -18,15 +18,16 @@ const PLATFORM_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   '蝦皮購物':            'cart',
   'PChome 24h':         'cube',
   'Yahoo購物中心':       'storefront-outline',
-  '燦坤3C':             'flash',
-  '燦坤':               'flash',
+  '露天拍賣':            'pricetags',
   '博客來':             'book',
+  'UNIQLO 台灣':        'shirt-outline',
+  'UNIQLO 日本':        'shirt-outline',
+  'GU 台灣':            'shirt',
+  'GU 日本':            'shirt',
   'Amazon Japan':       'logo-amazon',
   '楽天市場':           'gift',
   'Yahoo!ショッピング': 'pricetag',
   '価格.com':           'bar-chart',
-  'ヨドバシカメラ':     'camera',
-  'ビックカメラ':       'camera-outline',
 };
 
 function fmtTWD(n: number) { return `NT$${Math.round(n).toLocaleString('zh-TW')}`; }

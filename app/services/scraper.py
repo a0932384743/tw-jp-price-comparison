@@ -2,8 +2,10 @@
 Price Scraper – Taiwan & Japan e-commerce platforms.
 
 Production runs concurrent real HTTP scrapers:
-  Taiwan:  PChome 24h (JSON API, no auth) + momo購物網 (HTML)
-  Japan:   楽天市場 (HTML) + Yahoo!ショッピング (HTML)
+  Taiwan:  PChome 24h (JSON API) + momo購物網 (HTML) + 蝦皮購物 (API)
+           + Yahoo TW (HTML) + 露天拍賣 (API) + UNIQLO TW (API) + GU TW (API)
+  Japan:   楽天市場 (HTML/API) + Yahoo!ショッピング (HTML/API)
+           + Amazon Japan (HTML) + 価格.com (HTML) + UNIQLO JP (API) + GU JP (API)
 
 Development uses deterministic mock data so the pipeline works
 without hitting live sites (toggle via APP_ENV).
@@ -320,6 +322,106 @@ async def _scrape_ruten_tw(client: httpx.AsyncClient, keyword: str) -> list[Pric
         return []
 
 
+# ── Brand official APIs (Taiwan) ────────────────────────────────────────────
+
+async def _scrape_uniqlo_tw(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """UNIQLO Taiwan official search API – no auth required."""
+    t0 = time.perf_counter()
+    url = (
+        f"https://www.uniqlo.com/tw/api/commerce/v5/zh_TW/search"
+        f"?q={quote(keyword)}&offset=0&limit=8&httpFailure=true"
+    )
+    try:
+        logger.info("→ [UNIQLO TW] querying '%s'", keyword)
+        resp = await client.get(url, headers={
+            **_HEADERS_TW,
+            "Origin": "https://www.uniqlo.com",
+            "Referer": f"https://www.uniqlo.com/tw/search?q={quote(keyword)}",
+        }, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        for item in (data.get("result") or {}).get("items", [])[:8]:
+            name = (item.get("name") or "").strip()
+            prices = item.get("prices") or {}
+            promo = prices.get("promo") or {}
+            base = prices.get("base") or {}
+            price = promo.get("value") or base.get("value") or 0
+            product_id = item.get("productId", "")
+            main_pic = item.get("mainPic") or ""
+            if main_pic.startswith("/"):
+                image_url: str | None = f"https://image.uniqlo.com{main_pic}"
+            elif main_pic.startswith("https://"):
+                image_url = main_pic
+            else:
+                image_url = None
+            if name and price:
+                results.append(PriceListing(
+                    platform="UNIQLO 台灣",
+                    title=name,
+                    price=float(price),
+                    currency="TWD",
+                    url=f"https://www.uniqlo.com/tw/products/{product_id}/00" if product_id else "https://www.uniqlo.com/tw",
+                    image_url=image_url,
+                    data_source="scraped",
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("← [UNIQLO TW] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [UNIQLO TW] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
+async def _scrape_gu_tw(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """GU Taiwan official search API – no auth required."""
+    t0 = time.perf_counter()
+    url = (
+        f"https://www.gu-global.com/tw/api/commerce/v5/zh_TW/search"
+        f"?q={quote(keyword)}&offset=0&limit=8&httpFailure=true"
+    )
+    try:
+        logger.info("→ [GU TW] querying '%s'", keyword)
+        resp = await client.get(url, headers={
+            **_HEADERS_TW,
+            "Origin": "https://www.gu-global.com",
+            "Referer": f"https://www.gu-global.com/tw/search?q={quote(keyword)}",
+        }, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        for item in (data.get("result") or {}).get("items", [])[:8]:
+            name = (item.get("name") or "").strip()
+            prices = item.get("prices") or {}
+            promo = prices.get("promo") or {}
+            base = prices.get("base") or {}
+            price = promo.get("value") or base.get("value") or 0
+            product_id = item.get("productId", "")
+            main_pic = item.get("mainPic") or ""
+            if main_pic.startswith("/"):
+                image_url: str | None = f"https://image.gu-global.com{main_pic}"
+            elif main_pic.startswith("https://"):
+                image_url = main_pic
+            else:
+                image_url = None
+            if name and price:
+                results.append(PriceListing(
+                    platform="GU 台灣",
+                    title=name,
+                    price=float(price),
+                    currency="TWD",
+                    url=f"https://www.gu-global.com/tw/products/{product_id}/00" if product_id else "https://www.gu-global.com/tw",
+                    image_url=image_url,
+                    data_source="scraped",
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("← [GU TW] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [GU TW] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
 # ── Japan live scrapers ──────────────────────────────────────────────────────
 
 async def _scrape_rakuten_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
@@ -547,6 +649,106 @@ async def _scrape_kakaku_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
         return []
 
 
+# ── Brand official APIs (Japan) ─────────────────────────────────────────────
+
+async def _scrape_uniqlo_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """UNIQLO Japan official search API – no auth required."""
+    t0 = time.perf_counter()
+    url = (
+        f"https://www.uniqlo.com/jp/api/commerce/v5/ja_JP/search"
+        f"?q={quote(keyword)}&offset=0&limit=8&httpFailure=true"
+    )
+    try:
+        logger.info("→ [UNIQLO JP] querying '%s'", keyword)
+        resp = await client.get(url, headers={
+            **_HEADERS_JP,
+            "Origin": "https://www.uniqlo.com",
+            "Referer": f"https://www.uniqlo.com/jp/search?q={quote(keyword)}",
+        }, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        for item in (data.get("result") or {}).get("items", [])[:8]:
+            name = (item.get("name") or "").strip()
+            prices = item.get("prices") or {}
+            promo = prices.get("promo") or {}
+            base = prices.get("base") or {}
+            price = promo.get("value") or base.get("value") or 0
+            product_id = item.get("productId", "")
+            main_pic = item.get("mainPic") or ""
+            if main_pic.startswith("/"):
+                image_url: str | None = f"https://image.uniqlo.com{main_pic}"
+            elif main_pic.startswith("https://"):
+                image_url = main_pic
+            else:
+                image_url = None
+            if name and price:
+                results.append(PriceListing(
+                    platform="UNIQLO 日本",
+                    title=name,
+                    price=float(price),
+                    currency="JPY",
+                    url=f"https://www.uniqlo.com/jp/products/{product_id}/00" if product_id else "https://www.uniqlo.com/jp",
+                    image_url=image_url,
+                    data_source="scraped",
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("← [UNIQLO JP] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [UNIQLO JP] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
+async def _scrape_gu_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """GU Japan official search API – no auth required."""
+    t0 = time.perf_counter()
+    url = (
+        f"https://www.gu-global.com/jp/api/commerce/v5/ja_JP/search"
+        f"?q={quote(keyword)}&offset=0&limit=8&httpFailure=true"
+    )
+    try:
+        logger.info("→ [GU JP] querying '%s'", keyword)
+        resp = await client.get(url, headers={
+            **_HEADERS_JP,
+            "Origin": "https://www.gu-global.com",
+            "Referer": f"https://www.gu-global.com/jp/search?q={quote(keyword)}",
+        }, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        for item in (data.get("result") or {}).get("items", [])[:8]:
+            name = (item.get("name") or "").strip()
+            prices = item.get("prices") or {}
+            promo = prices.get("promo") or {}
+            base = prices.get("base") or {}
+            price = promo.get("value") or base.get("value") or 0
+            product_id = item.get("productId", "")
+            main_pic = item.get("mainPic") or ""
+            if main_pic.startswith("/"):
+                image_url: str | None = f"https://image.gu-global.com{main_pic}"
+            elif main_pic.startswith("https://"):
+                image_url = main_pic
+            else:
+                image_url = None
+            if name and price:
+                results.append(PriceListing(
+                    platform="GU 日本",
+                    title=name,
+                    price=float(price),
+                    currency="JPY",
+                    url=f"https://www.gu-global.com/jp/products/{product_id}/00" if product_id else "https://www.gu-global.com/jp",
+                    image_url=image_url,
+                    data_source="scraped",
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("← [GU JP] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [GU JP] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
 # ── Platform search URL lookup ───────────────────────────────────────────────
 
 _PLATFORM_SEARCH_URLS: dict[str, str] = {
@@ -555,8 +757,12 @@ _PLATFORM_SEARCH_URLS: dict[str, str] = {
     "蝦皮":            "https://shopee.tw/search?keyword={kw}",
     "shopee":          "https://shopee.tw/search?keyword={kw}",
     "yahoo購物":       "https://tw.buy.yahoo.com/search/product?p={kw}",
-    "燦坤":            "https://www.tkec.com.tw/search.aspx?q={kw}",
+    "露天":            "https://www.ruten.com.tw/find/?q={kw}",
     "博客來":          "https://search.books.com.tw/search/query/key/{kw}",
+    "uniqlo 台灣":     "https://www.uniqlo.com/tw/search?q={kw}",
+    "uniqlo 日本":     "https://www.uniqlo.com/jp/search?q={kw}",
+    "gu 台灣":         "https://www.gu-global.com/tw/search?q={kw}",
+    "gu 日本":         "https://www.gu-global.com/jp/search?q={kw}",
     "楽天":            "https://search.rakuten.co.jp/search/mall/{kw}/",
     "rakuten":         "https://search.rakuten.co.jp/search/mall/{kw}/",
     "yahoo!ショッピング": "https://shopping.yahoo.co.jp/search?p={kw}",
@@ -564,10 +770,6 @@ _PLATFORM_SEARCH_URLS: dict[str, str] = {
     "amazon":          "https://www.amazon.co.jp/s?k={kw}",
     "価格.com":        "https://kakaku.com/search_results/{kw}/",
     "kakaku":          "https://kakaku.com/search_results/{kw}/",
-    "ヨドバシ":        "https://www.yodobashi.com/?word={kw}",
-    "yodobashi":       "https://www.yodobashi.com/?word={kw}",
-    "ビックカメラ":    "https://www.biccamera.com/bc/s/?q={kw}",
-    "biccamera":       "https://www.biccamera.com/bc/s/?q={kw}",
 }
 
 
@@ -786,7 +988,7 @@ async def _scrape_yahoo_shopping_jp_api(client: httpx.AsyncClient, keyword: str,
 # ── Public API ───────────────────────────────────────────────────────────────
 
 async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
-    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW + 露天拍賣, with Gemini fallback."""
+    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW + 露天拍賣 + UNIQLO TW + GU TW."""
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock TW prices for '%s'", keyword)
@@ -800,6 +1002,8 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
             _scrape_shopee_tw(client, keyword),
             _scrape_yahoo_tw(client, keyword),
             _scrape_ruten_tw(client, keyword),
+            _scrape_uniqlo_tw(client, keyword),
+            _scrape_gu_tw(client, keyword),
         )
     combined = [r for src in results_per_source for r in src]
     for listing in combined:
@@ -816,13 +1020,13 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
 
 
 async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
-    """Return Japan listings – official APIs first, then HTML scrapers, then Gemini fallback.
+    """Return Japan listings – official APIs first, then HTML scrapers.
 
     Priority:
     1. Rakuten Ichiba API  (if RAKUTEN_APP_ID is set) → real product images
     2. Yahoo Shopping API  (if YAHOO_JP_APP_ID is set) → real product images
     3. HTML scrapers (Rakuten / Yahoo / Amazon / Kakaku)
-    4. Gemini Search fallback
+    4. UNIQLO JP + GU JP (always, official APIs)
     """
     settings = get_settings()
     if settings.app_env != "production":
@@ -848,6 +1052,8 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         tasks += [
             _scrape_amazon_jp(client, keyword),
             _scrape_kakaku_jp(client, keyword),
+            _scrape_uniqlo_jp(client, keyword),
+            _scrape_gu_jp(client, keyword),
         ]
         results_per_source = await asyncio.gather(*tasks)
 
