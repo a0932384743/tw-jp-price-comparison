@@ -56,6 +56,38 @@ def _filter_outliers(listings: list[PriceListing], min_ratio: float = 0.40) -> l
     return sorted(filtered, key=lambda l: l.price)
 
 
+def _dedup_cheapest_per_platform(listings: list[PriceListing]) -> list[PriceListing]:
+    """Keep only the single cheapest listing per platform.
+
+    Eliminates duplicate cards from the same store, ensuring each e-commerce
+    platform appears at most once with its best available price.
+    """
+    seen: dict[str, PriceListing] = {}
+    for l in sorted(listings, key=lambda x: x.price):
+        if l.platform not in seen:
+            seen[l.platform] = l
+    return sorted(seen.values(), key=lambda x: x.price)
+
+
+def _filter_relevant(listings: list[PriceListing], keyword: str) -> list[PriceListing]:
+    """Drop listings whose title shares no token with the search keyword.
+
+    Uses a lenient rule: only filters a listing when NONE of the keyword tokens
+    (length ≥ 2) appear in the title. Falls back to the full list if all are
+    filtered to avoid returning nothing on CJK / cross-language mismatches.
+    """
+    tokens = [t.lower() for t in re.split(r'[\s\-_/()\[\]·・]+', keyword) if len(t) >= 2]
+    if not tokens:
+        return listings
+
+    def _matches(title: str) -> bool:
+        tl = title.lower()
+        return any(tok in tl for tok in tokens)
+
+    relevant = [l for l in listings if _matches(l.title)]
+    return relevant if relevant else listings  # never return empty
+
+
 # ── Mock helpers (development only) ─────────────────────────────────────────
 
 def _seed_from(keyword: str) -> int:
@@ -137,7 +169,7 @@ async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceL
                     url=f"https://24h.pchome.com.tw/prod/{prod_id}",
                     image_url=image_url,
                 ))
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [PChome] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -181,7 +213,7 @@ async def _scrape_momo(client: httpx.AsyncClient, keyword: str) -> list[PriceLis
                 ))
             except (ValueError, AttributeError):
                 continue
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [momo] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -233,7 +265,7 @@ async def _scrape_shopee_tw(client: httpx.AsyncClient, keyword: str) -> list[Pri
                     url=f"https://shopee.tw/product/{shop_id}/{item_id}",
                     image_url=image_url,
                 ))
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [蝦皮] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -276,7 +308,7 @@ async def _scrape_yahoo_tw(client: httpx.AsyncClient, keyword: str) -> list[Pric
                 ))
             except (ValueError, AttributeError):
                 continue
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [Yahoo TW] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -314,7 +346,7 @@ async def _scrape_ruten_tw(client: httpx.AsyncClient, keyword: str) -> list[Pric
                     url=f"https://goods.ruten.com.tw/item/show?{prod_id}" if prod_id else "https://www.ruten.com.tw",
                     image_url=image_url,
                 ))
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [露天拍賣] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -365,7 +397,7 @@ async def _scrape_uniqlo_tw(client: httpx.AsyncClient, keyword: str) -> list[Pri
                     image_url=image_url,
                     data_source="scraped",
                 ))
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [UNIQLO TW] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -414,7 +446,7 @@ async def _scrape_gu_tw(client: httpx.AsyncClient, keyword: str) -> list[PriceLi
                     image_url=image_url,
                     data_source="scraped",
                 ))
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [GU TW] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -464,7 +496,7 @@ async def _scrape_rakuten_jp(client: httpx.AsyncClient, keyword: str) -> list[Pr
                 ))
             except (ValueError, AttributeError):
                 continue
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [楽天HTML] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -598,7 +630,7 @@ async def _scrape_amazon_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
                 ))
             except (ValueError, AttributeError):
                 continue
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [Amazon JP] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -641,7 +673,7 @@ async def _scrape_kakaku_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
                 ))
             except (ValueError, AttributeError):
                 continue
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [Kakaku] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -692,7 +724,7 @@ async def _scrape_uniqlo_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
                     image_url=image_url,
                     data_source="scraped",
                 ))
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [UNIQLO JP] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -741,7 +773,7 @@ async def _scrape_gu_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceLi
                     image_url=image_url,
                     data_source="scraped",
                 ))
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [GU JP] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -930,7 +962,7 @@ async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: s
                     image_url=image_url,
                     data_source="scraped",
                 ))
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [Rakuten API] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -977,7 +1009,7 @@ async def _scrape_yahoo_shopping_jp_api(client: httpx.AsyncClient, keyword: str,
                     image_url=image_url,
                     data_source="scraped",
                 ))
-        results = _filter_outliers(results)[:5]
+        results = _filter_outliers(results)[:3]
         logger.info("← [Yahoo JP API] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
@@ -1009,12 +1041,19 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
     for listing in combined:
         if listing.data_source is None:
             listing.data_source = "scraped"
-    combined.sort(key=lambda l: l.price)
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
         logger.warning("All TW scrapers returned 0 results for '%s'; falling back to Gemini", keyword)
         combined = await _fallback_prices_via_gemini(keyword, "TW")
+    else:
+        # 1. Remove listings with no keyword overlap (wrong product)
+        combined = _filter_relevant(combined, keyword)
+        # 2. One card per platform (cheapest wins)
+        combined = _dedup_cheapest_per_platform(combined)
+        # 3. Cross-platform outlier filter (catches accessories priced < 30% of median)
+        combined = _filter_outliers(combined, min_ratio=0.30)
+        combined.sort(key=lambda l: l.price)
 
     logger.info("TW total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
@@ -1067,8 +1106,12 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
     if not combined:
         logger.warning("All JP scrapers returned 0 results for '%s'; falling back to Gemini", keyword)
         combined = await _fallback_prices_via_gemini(keyword, "JP")
+    else:
+        combined = _filter_relevant(combined, keyword)
+        combined = _dedup_cheapest_per_platform(combined)
+        combined = _filter_outliers(combined, min_ratio=0.30)
+        combined.sort(key=lambda l: l.price)
 
-    combined.sort(key=lambda l: l.price)
     logger.info("JP total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
 
