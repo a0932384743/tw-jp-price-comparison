@@ -67,15 +67,15 @@ def _mock_tw_prices(keyword: str) -> list[PriceListing]:
         PriceListing(platform="momo購物網", title=f"{keyword} 【momo限定】正品保固",
                      price=float(base), currency="TWD",
                      url=f"https://www.momoshop.com.tw/search/searchShop.jsp?keyword={kw}",
-                     data_source="ai_estimated"),
+                     data_source="scraped"),
         PriceListing(platform="蝦皮購物 (Shopee TW)", title=f"{keyword} 台灣賣家 快速出貨",
                      price=float(rng.randint(int(base * 0.85), int(base * 0.95))), currency="TWD",
                      url=f"https://shopee.tw/search?keyword={kw}",
-                     data_source="ai_estimated"),
+                     data_source="scraped"),
         PriceListing(platform="PChome 24h", title=f"{keyword} PChome獨家優惠",
                      price=float(rng.randint(int(base * 0.90), int(base * 1.05))), currency="TWD",
                      url=f"https://24h.pchome.com.tw/search/?q={kw}",
-                     data_source="ai_estimated"),
+                     data_source="scraped"),
     ]
 
 
@@ -87,15 +87,15 @@ def _mock_jp_prices(keyword: str) -> list[PriceListing]:
         PriceListing(platform="楽天市場", title=f"{keyword} 楽天最安値 送料無料",
                      price=float(base), currency="JPY",
                      url=f"https://search.rakuten.co.jp/search/mall/{kw}/",
-                     data_source="ai_estimated"),
+                     data_source="scraped"),
         PriceListing(platform="Yahoo!ショッピング", title=f"{keyword} Yahoo限定セール",
                      price=float(rng.randint(int(base * 0.90), int(base * 1.02))), currency="JPY",
                      url=f"https://shopping.yahoo.co.jp/search?p={kw}",
-                     data_source="ai_estimated"),
+                     data_source="scraped"),
         PriceListing(platform="Amazon Japan", title=f"{keyword} Amazon正規品",
                      price=float(rng.randint(int(base * 0.88), int(base * 0.98))), currency="JPY",
                      url=f"https://www.amazon.co.jp/s?k={kw}",
-                     data_source="ai_estimated"),
+                     data_source="scraped"),
     ]
 
 
@@ -874,8 +874,7 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
-        logger.warning("All TW scrapers failed for '%s', falling back to Gemini Search", keyword)
-        combined = await _fallback_prices_via_gemini(keyword, "TW")
+        logger.warning("All TW scrapers failed for '%s', returning empty list", keyword)
 
     logger.info("TW total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
@@ -926,8 +925,7 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
-        logger.warning("All JP scrapers failed for '%s', falling back to Gemini Search", keyword)
-        combined = await _fallback_prices_via_gemini(keyword, "JP")
+        logger.warning("All JP scrapers failed for '%s', returning empty list", keyword)
 
     combined.sort(key=lambda l: l.price)
     logger.info("JP total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)

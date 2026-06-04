@@ -48,7 +48,7 @@ _GENERATION_CONFIG = {
 
 
 def _average_price(listings: list[PriceListing]) -> float | None:
-    prices = [l.price for l in listings if l.price > 0]
+    prices = [l.price for l in listings if l.price > 0 and l.data_source != "ai_estimated"]
     return statistics.mean(prices) if prices else None
 
 
