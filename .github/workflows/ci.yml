@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'mobile/**'
+      - 'app/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Tests
+        run: npm run test:ci
+
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Type check
+        run: python -m py_compile app/services/scraper.py app/api/routes.py app/services/advisor.py app/services/ai_agent.py app/services/exchange_rate.py app/core/config.py app/schemas/product.py
