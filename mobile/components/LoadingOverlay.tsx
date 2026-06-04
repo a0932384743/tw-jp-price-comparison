@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
@@ -16,8 +16,8 @@ interface Props { coldStart?: boolean; }
 
 export default function LoadingOverlay({ coldStart }: Props) {
   const [stepIdx, setStepIdx] = useState(0);
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-  const barAnim  = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useMemo(() => new Animated.Value(1), []);
+  const barAnim  = useMemo(() => new Animated.Value(0), []);
 
   useEffect(() => {
     let cancelled = false;

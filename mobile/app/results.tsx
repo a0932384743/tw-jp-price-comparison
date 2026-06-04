@@ -168,15 +168,14 @@ function PriceHistoryChart({ keyword, market }: { keyword: string; market: 'TW' 
 
 export default function ResultsScreen() {
   const router = useRouter();
-  const [data, setData] = useState<SearchResponse | null>(null);
-  const [favorited, setFavorited] = useState(false);
+  const [data] = useState<SearchResponse | null>(() => getLastResult());
+  const [favorited, setFavorited] = useState(() =>
+    data ? isFavorite(data.keyword_mapping.refined_tw_keyword) : false
+  );
 
   useEffect(() => {
-    const result = getLastResult();
-    if (!result) { router.replace('/'); return; }
-    setData(result);
-    setFavorited(isFavorite(result.keyword_mapping.refined_tw_keyword));
-  }, [router]);
+    if (!data) { router.replace('/'); }
+  }, [data, router]);
 
   const handleToggleFavorite = () => {
     if (!data) return;
