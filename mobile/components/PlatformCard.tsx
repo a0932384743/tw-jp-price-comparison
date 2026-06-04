@@ -18,6 +18,7 @@ const PLATFORM_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   '蝦皮購物':            'cart',
   'PChome 24h':         'cube',
   'Yahoo購物中心':       'storefront-outline',
+  '燦坤3C':             'flash',
   '燦坤':               'flash',
   '博客來':             'book',
   'Amazon Japan':       'logo-amazon',

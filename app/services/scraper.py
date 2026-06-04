@@ -273,6 +273,46 @@ async def _scrape_yahoo_tw(client: httpx.AsyncClient, keyword: str) -> list[Pric
         return []
 
 
+async def _scrape_tsannkuen(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """燦坤3C – semi-public JSON search API, sorted by price ascending."""
+    url = (
+        f"https://www.tkec.com.tw/api/catalog/v1/products/search"
+        f"?keyword={quote(keyword)}&sortField=price&sortOrder=asc&pageSize=8&page=1"
+    )
+    try:
+        resp = await client.get(url, headers={**_HEADERS_TW, "Accept": "application/json"}, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        items = (
+            data.get("data", {}).get("products")
+            or data.get("products")
+            or data.get("items")
+            or []
+        )
+        for item in items[:8]:
+            name = (item.get("name") or item.get("title") or "").strip()
+            price = item.get("price") or item.get("salePrice") or item.get("minPrice") or 0
+            prod_id = item.get("id") or item.get("productId") or ""
+            img = item.get("imageUrl") or item.get("image") or item.get("thumbnail") or ""
+            image_url = img if img and img.startswith("http") else None
+            if name and price:
+                results.append(PriceListing(
+                    platform="燦坤3C",
+                    title=name,
+                    price=float(price),
+                    currency="TWD",
+                    url=f"https://www.tkec.com.tw/product/{prod_id}" if prod_id else "https://www.tkec.com.tw",
+                    image_url=image_url,
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("燦坤3C: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("燦坤3C scrape failed for '%s': %s", keyword, exc)
+        return []
+
+
 # ── Japan live scrapers ──────────────────────────────────────────────────────
 
 async def _scrape_rakuten_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
@@ -811,7 +851,7 @@ async def _scrape_biccamera(client: httpx.AsyncClient, keyword: str) -> list[Pri
 # ── Public API ───────────────────────────────────────────────────────────────
 
 async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
-    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW, with Gemini fallback."""
+    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW + 燦坤3C, with Gemini fallback."""
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock TW prices for '%s'", keyword)
@@ -824,6 +864,7 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
             _scrape_momo(client, keyword),
             _scrape_shopee_tw(client, keyword),
             _scrape_yahoo_tw(client, keyword),
+            _scrape_tsannkuen(client, keyword),
         )
     combined = [r for src in results_per_source for r in src]
     for listing in combined:
