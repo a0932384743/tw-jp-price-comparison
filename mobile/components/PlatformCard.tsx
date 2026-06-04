@@ -62,17 +62,16 @@ export default function PlatformCard({ listing, market, exchangeRate, isCheapest
       <View style={[styles.header, { backgroundColor: accentColor }]}>
         <Ionicons name={iconName} size={13} color="#fff" />
         <Text style={styles.platform} numberOfLines={1}>{listing.platform}</Text>
-        {listing.data_source === 'ai_estimated' && (
+        {listing.data_source === 'ai_estimated' ? (
           <View style={styles.aiBadge}>
             <Ionicons name="sparkles" size={9} color={Colors.gold} />
             <Text style={styles.aiText}>AI 估算</Text>
           </View>
-        )}
-        {isCheapest && (
+        ) : isCheapest ? (
           <View style={styles.cheapestBadge}>
-            <Text style={styles.cheapestText}>最低價 🏅</Text>
+            <Text style={styles.cheapestText}>電商最低價 🏅</Text>
           </View>
-        )}
+        ) : null}
       </View>
 
       {/* Body */}

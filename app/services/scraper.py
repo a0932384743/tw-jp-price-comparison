@@ -1013,7 +1013,8 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
-        logger.warning("All TW scrapers failed for '%s', returning empty list", keyword)
+        logger.warning("All TW scrapers returned 0 results for '%s'; falling back to Gemini", keyword)
+        combined = await _fallback_prices_via_gemini(keyword, "TW")
 
     logger.info("TW total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
@@ -1064,7 +1065,8 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
-        logger.warning("All JP scrapers failed for '%s', returning empty list", keyword)
+        logger.warning("All JP scrapers returned 0 results for '%s'; falling back to Gemini", keyword)
+        combined = await _fallback_prices_via_gemini(keyword, "JP")
 
     combined.sort(key=lambda l: l.price)
     logger.info("JP total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
