@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -50,6 +51,8 @@ function SavingsBanner({ advice }: { advice: BuyingAdvice }) {
   const jp  = advice.jp_tax_free_price_twd;
   const savings = tw != null && jp != null ? Math.abs(tw - jp) : null;
   const max     = Math.max(tw ?? 0, jp ?? 0);
+  const min     = Math.min(tw ?? Infinity, jp ?? Infinity);
+  const savingsPct = savings != null && min > 0 ? Math.round((savings / max) * 100) : null;
 
   return (
     <View style={[s.banner, { backgroundColor: bg, borderColor: color }]}>
@@ -58,7 +61,9 @@ function SavingsBanner({ advice }: { advice: BuyingAdvice }) {
         <Text style={[s.bannerLabel, { color }]}>{label}</Text>
         {savings != null && savings > 100 && (
           <View style={[s.savingsBadge, { backgroundColor: color }]}>
-            <Text style={s.savingsText}>省 {fmt(savings)}</Text>
+            <Text style={s.savingsText}>
+              省 {fmt(savings)}{savingsPct != null && savingsPct >= 5 ? ` (${savingsPct}%)` : ''}
+            </Text>
           </View>
         )}
       </View>
@@ -219,8 +224,22 @@ export default function ResultsScreen() {
             <Ionicons name={favorited ? 'heart' : 'heart-outline'} size={22} color={favorited ? '#F87171' : 'rgba(255,255,255,0.6)'} />
           </TouchableOpacity>
         </View>
-        <Text style={s.productName}>{keyword_mapping.refined_tw_keyword}</Text>
-        <Text style={s.jpKeyword}>🇯🇵 {keyword_mapping.refined_jp_keyword}</Text>
+
+        {/* Product image + names side by side */}
+        <View style={s.headerMain}>
+          {product_image_url && (
+            <Image
+              source={{ uri: product_image_url }}
+              style={s.headerImage}
+              resizeMode="contain"
+            />
+          )}
+          <View style={s.headerText}>
+            <Text style={s.productName}>{keyword_mapping.refined_tw_keyword}</Text>
+            <Text style={s.jpKeyword}>🇯🇵 {keyword_mapping.refined_jp_keyword}</Text>
+          </View>
+        </View>
+
         <View style={s.headerBottomRow}>
           <View style={s.rateChip}>
             <Ionicons name="swap-horizontal" size={12} color="rgba(255,255,255,0.7)" />
@@ -287,17 +306,20 @@ const s = StyleSheet.create({
   content:  { paddingBottom: 56 },
 
   /* product header */
-  productHeader: { padding: 16, paddingTop: 20, gap: 6 },
+  productHeader: { padding: 16, paddingTop: 20, gap: 8 },
   headerTopRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerBottomRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 2 },
+  headerMain:   { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  headerImage:  { width: 88, height: 88, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.1)', flexShrink: 0 },
+  headerText:   { flex: 1, gap: 5 },
   categoryBadge: {
     flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
     backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 20,
     paddingHorizontal: 10, paddingVertical: 4, gap: 4,
   },
   categoryText: { fontSize: 11, fontWeight: '700', color: '#fff' },
-  productName:  { fontSize: 20, fontWeight: '900', color: '#fff', lineHeight: 27 },
-  jpKeyword:    { fontSize: 13, color: 'rgba(255,255,255,0.75)' },
+  productName:  { fontSize: 18, fontWeight: '900', color: '#fff', lineHeight: 25 },
+  jpKeyword:    { fontSize: 12, color: 'rgba(255,255,255,0.75)' },
   rateChip: {
     flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
     backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 20,

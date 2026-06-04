@@ -38,18 +38,19 @@ _HEADERS_JP = {"User-Agent": _UA, "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"}
 
 # ── Price outlier filter ─────────────────────────────────────────────────────
 
-def _filter_outliers(listings: list[PriceListing], min_ratio: float = 0.35) -> list[PriceListing]:
-    """Remove listings whose price is far below the group median.
+def _filter_outliers(listings: list[PriceListing], min_ratio: float = 0.40) -> list[PriceListing]:
+    """Remove listings whose price is far below the group median (likely accessories/unrelated).
 
-    Accessories and unrelated products tend to be much cheaper than the
-    actual searched item. Keeping only items >= median * min_ratio removes
-    the most obvious outliers while preserving genuine price variation.
+    Uses min_ratio=0.40: keeps items priced at ≥40% of median, so accessories
+    costing a fraction of the main product are excluded while genuine bargains remain.
+    Results are returned sorted by price ascending so the cheapest appears first.
     """
     if len(listings) <= 1:
-        return listings
+        return sorted(listings, key=lambda l: l.price)
     prices = sorted(l.price for l in listings)
     median = prices[len(prices) // 2]
-    return [l for l in listings if l.price >= median * min_ratio]
+    filtered = [l for l in listings if l.price >= median * min_ratio]
+    return sorted(filtered, key=lambda l: l.price)
 
 
 # ── Mock helpers (development only) ─────────────────────────────────────────
@@ -101,10 +102,10 @@ def _mock_jp_prices(keyword: str) -> list[PriceListing]:
 # ── Taiwan live scrapers ─────────────────────────────────────────────────────
 
 async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
-    """PChome 24h JSON search API – no authentication required."""
+    """PChome 24h JSON search API – sorted by price ascending to get cheapest first."""
     url = (
         f"https://ecshweb.pchome.com.tw/search/v3.3/all/results"
-        f"?q={quote(keyword)}&page=1&sort=rnk/dc"
+        f"?q={quote(keyword)}&page=1&sort=price/ac"
     )
     try:
         resp = await client.get(url, headers=_HEADERS_TW, timeout=15)
@@ -205,13 +206,15 @@ async def _scrape_shopee_tw(client: httpx.AsyncClient, keyword: str) -> list[Pri
         for entry in items[:8]:
             item = entry.get("item_basic") or entry
             name = (item.get("name") or "").strip()
-            # Shopee prices are in "cents" (TWD * 100000)
-            price_raw = item.get("price") or item.get("price_min") or 0
+            # Shopee prices are in "cents" (TWD * 100000).
+            # Use price_min first – for multi-variant items this is the cheapest option.
+            price_raw = item.get("price_min") or item.get("price") or 0
             price = float(price_raw) / 100000 if price_raw > 100000 else float(price_raw)
             item_id = item.get("itemid") or item.get("item_id", "")
             shop_id = item.get("shopid") or item.get("shop_id", "")
             img_hash = item.get("image") or (item.get("images") or [None])[0]
-            image_url = f"https://cf.shopee.tw/file/{img_hash}_tn" if img_hash else None
+            # Use full CDN URL (no suffix = original quality); _tn is only 100×100
+            image_url = f"https://cf.shopee.tw/file/{img_hash}" if img_hash else None
             if name and price > 1:
                 results.append(PriceListing(
                     platform="蝦皮購物",
@@ -267,6 +270,46 @@ async def _scrape_yahoo_tw(client: httpx.AsyncClient, keyword: str) -> list[Pric
         return results
     except Exception as exc:
         logger.warning("Yahoo TW scrape failed for '%s': %s", keyword, exc)
+        return []
+
+
+async def _scrape_tsannkuen(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """燦坤3C – semi-public JSON search API, sorted by price ascending."""
+    url = (
+        f"https://www.tkec.com.tw/api/catalog/v1/products/search"
+        f"?keyword={quote(keyword)}&sortField=price&sortOrder=asc&pageSize=8&page=1"
+    )
+    try:
+        resp = await client.get(url, headers={**_HEADERS_TW, "Accept": "application/json"}, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        items = (
+            data.get("data", {}).get("products")
+            or data.get("products")
+            or data.get("items")
+            or []
+        )
+        for item in items[:8]:
+            name = (item.get("name") or item.get("title") or "").strip()
+            price = item.get("price") or item.get("salePrice") or item.get("minPrice") or 0
+            prod_id = item.get("id") or item.get("productId") or ""
+            img = item.get("imageUrl") or item.get("image") or item.get("thumbnail") or ""
+            image_url = img if img and img.startswith("http") else None
+            if name and price:
+                results.append(PriceListing(
+                    platform="燦坤3C",
+                    title=name,
+                    price=float(price),
+                    currency="TWD",
+                    url=f"https://www.tkec.com.tw/product/{prod_id}" if prod_id else "https://www.tkec.com.tw",
+                    image_url=image_url,
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("燦坤3C: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("燦坤3C scrape failed for '%s': %s", keyword, exc)
         return []
 
 
@@ -538,30 +581,38 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
 
     if market == "TW":
         prompt = (
-            f'Search Google Shopping and Google Search for the current retail price of '
+            f'Search Google Shopping and Google Search for the LOWEST current retail price of '
             f'"{keyword}" in Taiwan (台灣).\n'
             f"Check these platforms: PChome 24h, momo購物網, 蝦皮購物(Shopee), "
             f"Yahoo購物中心, 燦坤, 博客來.\n\n"
-            f"IMPORTANT: Only include results for the EXACT product \"{keyword}\", "
-            f"not accessories or unrelated items. Prices must be in TWD and realistic.\n\n"
+            f"CRITICAL RULES:\n"
+            f"1. Report the LOWEST available price at each platform (cheapest variant/promotion).\n"
+            f"2. Only include the EXACT product \"{keyword}\" – no accessories, cases, or bundles.\n"
+            f"3. If the product has variants (color/storage/size), use the cheapest variant price.\n"
+            f"4. Prices must be in TWD and reflect what a buyer pays at checkout (before shipping).\n"
+            f"5. Use the most recently observed price – do not guess outdated prices.\n\n"
             f"Return ONLY a JSON array with NO url field (no markdown, no explanation):\n"
             f'[{{"platform":"PChome 24h","title":"exact full product name","price":9490,'
             f'"currency":"TWD"}}]\n\n'
-            f"Include 4-6 results from different stores."
+            f"Include 4-6 results from different stores, sorted cheapest first."
         )
         currency = "TWD"
     else:
         prompt = (
-            f'Search Google Shopping and Google Search for the current retail price of '
+            f'Search Google Shopping and Google Search for the LOWEST current retail price of '
             f'"{keyword}" in Japan (日本).\n'
             f"Check these platforms: 楽天市場, Yahoo!ショッピング, Amazon.co.jp, "
             f"ヨドバシカメラ, ビックカメラ, 価格.com.\n\n"
-            f"IMPORTANT: Only include results for the EXACT product \"{keyword}\", "
-            f"not accessories. Prices must be in JPY and realistic.\n\n"
+            f"CRITICAL RULES:\n"
+            f"1. Report the LOWEST available price at each platform (cheapest variant/promotion).\n"
+            f"2. Only include the EXACT product \"{keyword}\" – no accessories or bundles.\n"
+            f"3. If the product has variants (color/storage/capacity), use the cheapest variant.\n"
+            f"4. Prices must be in JPY (tax-included) and reflect the actual checkout price.\n"
+            f"5. Use the most recently observed price – do not guess outdated prices.\n\n"
             f"Return ONLY a JSON array with NO url field (no markdown, no explanation):\n"
             f'[{{"platform":"楽天市場","title":"exact full product name","price":37980,'
             f'"currency":"JPY"}}]\n\n'
-            f"Include 4-6 results from different stores."
+            f"Include 4-6 results from different stores, sorted cheapest first."
         )
         currency = "JPY"
 
@@ -607,10 +658,109 @@ async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceLi
                     url=_platform_search_url(platform, keyword),
                     data_source="ai_estimated",
                 ))
+        results.sort(key=lambda l: l.price)
         logger.info("Gemini fallback (%s): %d results for '%s'", market, len(results), keyword)
         return results
     except (json.JSONDecodeError, ValueError) as exc:
         logger.warning("Failed to parse Gemini price response for '%s': %s | text: %.200s", keyword, exc, text)
+        return []
+
+
+# ── Japan official APIs (free, require registration) ────────────────────────
+
+async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: str) -> list[PriceListing]:
+    """楽天市場 Ichiba Item Search API v2017 – returns reliable product images.
+
+    Free API: register at https://webservice.rakuten.co.jp/ → set RAKUTEN_APP_ID.
+    Returns mediumImageUrls (128×128 Rakuten CDN) for each item.
+    """
+    url = (
+        "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
+        f"?applicationId={app_id}&keyword={quote(keyword)}&hits=8"
+        f"&sort=%2BitemPrice&format=json&availability=1"
+    )
+    try:
+        resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        for wrap in data.get("Items", [])[:8]:
+            item = wrap.get("Item", wrap)
+            name = item.get("itemName", "").strip()
+            price = item.get("itemPrice", 0)
+            item_url = item.get("itemUrl", "")
+
+            # mediumImageUrls is list[{"imageUrl": "..."}]; smallImageUrls same shape
+            image_url: str | None = None
+            for key in ("mediumImageUrls", "smallImageUrls"):
+                imgs = item.get(key) or []
+                if imgs:
+                    first = imgs[0]
+                    src = first.get("imageUrl") if isinstance(first, dict) else str(first)
+                    if src and src.startswith("https://"):
+                        image_url = src
+                        break
+
+            if name and price:
+                results.append(PriceListing(
+                    platform="楽天市場",
+                    title=name,
+                    price=float(price),
+                    currency="JPY",
+                    url=item_url,
+                    image_url=image_url,
+                    data_source="scraped",
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("Rakuten API: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("Rakuten API failed for '%s': %s", keyword, exc)
+        return []
+
+
+async def _scrape_yahoo_shopping_jp_api(client: httpx.AsyncClient, keyword: str, app_id: str) -> list[PriceListing]:
+    """Yahoo!ショッピング Shopping Web Service V3 API – returns CDN product images.
+
+    Free API: register at https://developer.yahoo.co.jp/ → set YAHOO_JP_APP_ID.
+    Returns image.medium (Yahoo CDN) for each item.
+    """
+    url = (
+        "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
+        f"?appid={app_id}&query={quote(keyword)}&results=8&sort=%2Bprice"
+    )
+    try:
+        resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results: list[PriceListing] = []
+        for hit in data.get("hits", [])[:8]:
+            name = (hit.get("name") or "").strip()
+            price = hit.get("price", 0)
+            item_url = hit.get("url") or hit.get("externalUrl", "")
+
+            img_obj = hit.get("image") or {}
+            image_url: str | None = None
+            if isinstance(img_obj, dict):
+                src = img_obj.get("medium") or img_obj.get("small") or ""
+                if src.startswith("https://"):
+                    image_url = src
+
+            if name and price:
+                results.append(PriceListing(
+                    platform="Yahoo!ショッピング",
+                    title=name,
+                    price=float(price),
+                    currency="JPY",
+                    url=item_url,
+                    image_url=image_url,
+                    data_source="scraped",
+                ))
+        results = _filter_outliers(results)[:5]
+        logger.info("Yahoo Shopping API: %d results for '%s'", len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("Yahoo Shopping API failed for '%s': %s", keyword, exc)
         return []
 
 
@@ -701,7 +851,7 @@ async def _scrape_biccamera(client: httpx.AsyncClient, keyword: str) -> list[Pri
 # ── Public API ───────────────────────────────────────────────────────────────
 
 async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
-    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW, with Gemini fallback."""
+    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW + 燦坤3C, with Gemini fallback."""
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock TW prices for '%s'", keyword)
@@ -714,23 +864,32 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
             _scrape_momo(client, keyword),
             _scrape_shopee_tw(client, keyword),
             _scrape_yahoo_tw(client, keyword),
+            _scrape_tsannkuen(client, keyword),
         )
     combined = [r for src in results_per_source for r in src]
     for listing in combined:
         if listing.data_source is None:
             listing.data_source = "scraped"
+    combined.sort(key=lambda l: l.price)
     await asyncio.sleep(settings.scraper_request_delay)
 
     if not combined:
         logger.warning("All TW scrapers failed for '%s', falling back to Gemini Search", keyword)
         combined = await _fallback_prices_via_gemini(keyword, "TW")
 
-    logger.info("TW total: %d listings for '%s'", len(combined), keyword)
+    logger.info("TW total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
 
 
 async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
-    """Return Japan listings – Rakuten + Yahoo + Amazon + Kakaku, with Gemini fallback."""
+    """Return Japan listings – official APIs first, then HTML scrapers, then Gemini fallback.
+
+    Priority:
+    1. Rakuten Ichiba API  (if RAKUTEN_APP_ID is set) → real product images
+    2. Yahoo Shopping API  (if YAHOO_JP_APP_ID is set) → real product images
+    3. HTML scrapers (Rakuten / Yahoo / Amazon / Kakaku / Yodobashi / BIC Camera)
+    4. Gemini Search fallback
+    """
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock JP prices for '%s'", keyword)
@@ -738,14 +897,28 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         return _mock_jp_prices(keyword)
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        results_per_source = await asyncio.gather(
-            _scrape_rakuten_jp(client, keyword),
-            _scrape_yahoo_shopping_jp(client, keyword),
+        # Build scraper tasks – prefer official APIs when keys are configured
+        tasks = []
+        if settings.rakuten_app_id:
+            tasks.append(_scrape_rakuten_api(client, keyword, settings.rakuten_app_id))
+            logger.debug("Using Rakuten API for '%s'", keyword)
+        else:
+            tasks.append(_scrape_rakuten_jp(client, keyword))
+
+        if settings.yahoo_jp_app_id:
+            tasks.append(_scrape_yahoo_shopping_jp_api(client, keyword, settings.yahoo_jp_app_id))
+            logger.debug("Using Yahoo Shopping API for '%s'", keyword)
+        else:
+            tasks.append(_scrape_yahoo_shopping_jp(client, keyword))
+
+        tasks += [
             _scrape_amazon_jp(client, keyword),
             _scrape_kakaku_jp(client, keyword),
             _scrape_yodobashi(client, keyword),
             _scrape_biccamera(client, keyword),
-        )
+        ]
+        results_per_source = await asyncio.gather(*tasks)
+
     combined = [r for src in results_per_source for r in src]
     for listing in combined:
         if listing.data_source is None:
@@ -756,8 +929,124 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         logger.warning("All JP scrapers failed for '%s', falling back to Gemini Search", keyword)
         combined = await _fallback_prices_via_gemini(keyword, "JP")
 
-    logger.info("JP total: %d listings for '%s'", len(combined), keyword)
+    combined.sort(key=lambda l: l.price)
+    logger.info("JP total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
+
+
+async def enrich_listing_images(listings: list[PriceListing], max_lookup: int = 4) -> None:
+    """Back-fill image_url for listings that have none.
+
+    Uses Google Custom Search API when GOOGLE_API_KEY + GOOGLE_CSE_ID are set
+    (higher quality), otherwise falls back to Bing.  Runs max_lookup concurrent
+    lookups to add minimal latency (~1-2 s).
+    """
+    need = [l for l in listings if not l.image_url][:max_lookup]
+    if not need:
+        return
+
+    settings = get_settings()
+    use_google = bool(settings.google_api_key and settings.google_cse_id)
+
+    async def _lookup(title: str) -> str | None:
+        if settings.serpapi_key:
+            result = await _serpapi_image_search(title[:80], settings.serpapi_key)
+            if result:
+                return result
+        if use_google:
+            result = await _google_image_search(title[:80], settings.google_api_key, settings.google_cse_id)
+            if result:
+                return result
+        return await _bing_image_search(title[:80])
+
+    imgs = await asyncio.gather(*[_lookup(l.title) for l in need], return_exceptions=True)
+    enriched = 0
+    for listing, img in zip(need, imgs):
+        if isinstance(img, str) and img.startswith("https://"):
+            listing.image_url = img
+            enriched += 1
+    logger.info(
+        "Image enrichment (%s): filled %d/%d missing (total %d/%d)",
+        "Google" if use_google else "Bing",
+        enriched, len(need),
+        sum(1 for l in listings if l.image_url), len(listings),
+    )
+
+
+async def _serpapi_image_search(keyword: str, api_key: str) -> str | None:
+    """Google Images via SerpApi REST endpoint (no SDK needed).
+
+    Free plan: 100 searches/month.  Set SERPAPI_KEY in Render env vars.
+    Docs: https://serpapi.com/images-results
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://serpapi.com/search.json",
+                params={
+                    "engine": "google_images",
+                    "q": keyword,
+                    "api_key": api_key,
+                    "num": 5,
+                    "safe": "active",
+                    "hl": "zh-tw",
+                },
+                timeout=12,
+            )
+            if resp.status_code == 429:
+                logger.warning("SerpApi rate limit reached")
+                return None
+            resp.raise_for_status()
+            for item in resp.json().get("images_results", []):
+                thumb = item.get("thumbnail") or item.get("original") or ""
+                if thumb.startswith("https://"):
+                    logger.info("SerpApi image for '%s': %s", keyword, thumb[:80])
+                    return thumb
+        return None
+    except Exception as exc:
+        logger.warning("SerpApi image search failed for '%s': %s", keyword, exc)
+        return None
+
+
+async def _google_image_search(keyword: str, api_key: str, cse_id: str) -> str | None:
+    """Google Custom Search API – image search.
+
+    Official API; returns high-quality product images.
+    Free tier: 100 queries/day.  Requires:
+      1. Create a Custom Search Engine at https://programmablesearch.google.com/
+         (search entire web, enable "Image search" in Settings → Search features)
+      2. Get an API key at https://console.developers.google.com/
+      3. Set GOOGLE_API_KEY and GOOGLE_CSE_ID in Render env vars.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://www.googleapis.com/customsearch/v1",
+                params={
+                    "key": api_key,
+                    "cx": cse_id,
+                    "q": keyword,
+                    "searchType": "image",
+                    "imgSize": "medium",
+                    "imgType": "photo",
+                    "num": 3,
+                    "safe": "active",
+                },
+                timeout=10,
+            )
+            if resp.status_code == 429:
+                logger.warning("Google CSE daily quota reached; falling back to Bing")
+                return None
+            resp.raise_for_status()
+            for item in resp.json().get("items", []):
+                link = item.get("link", "")
+                if link.startswith("https://"):
+                    logger.info("Google image for '%s': %s", keyword, link[:80])
+                    return link
+        return None
+    except Exception as exc:
+        logger.warning("Google image search failed for '%s': %s", keyword, exc)
+        return None
 
 
 async def _bing_image_search(keyword: str) -> str | None:
@@ -873,12 +1162,29 @@ async def _wikipedia_image(keyword: str) -> str | None:
 
 
 async def fetch_product_thumbnail(keyword: str) -> str | None:
-    """Return a product thumbnail URL – tries Bing, DuckDuckGo, and Wikipedia concurrently.
+    """Return a product thumbnail URL.
 
-    Bing/DDG return Bing CDN thumbnails (tse*.mm.bing.net) served without hotlink
-    restrictions.  Wikipedia returns Wikimedia Commons images for well-known products.
-    Returns None on total failure so it never blocks the main search pipeline.
+    Priority:
+    1. Google Custom Search API (if GOOGLE_API_KEY + GOOGLE_CSE_ID are set) –
+       official API, highest quality, 100 free queries/day
+    2. Bing Image Search HTML + DuckDuckGo + Wikipedia – concurrent, no key needed
+    Returns None on total failure so it never blocks the main pipeline.
     """
+    settings = get_settings()
+
+    # Priority 1: SerpApi Google Images (100 free/month, best quality)
+    if settings.serpapi_key:
+        result = await _serpapi_image_search(keyword, settings.serpapi_key)
+        if result:
+            return result
+
+    # Priority 2: Google Custom Search API (100 free/day)
+    if settings.google_api_key and settings.google_cse_id:
+        result = await _google_image_search(keyword, settings.google_api_key, settings.google_cse_id)
+        if result:
+            return result
+
+    # Priority 3: Concurrent Bing / DDG / Wikipedia fallback (no key needed)
     results = await asyncio.gather(
         _bing_image_search(keyword),
         _ddg_image_search(keyword),

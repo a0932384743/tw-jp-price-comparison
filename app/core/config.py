@@ -24,6 +24,23 @@ class Settings(BaseSettings):
     # Japan tax-free refund rate applied for physical JP shopping
     jp_tax_free_rate: float = 0.10
 
+    # Optional: SerpApi key for Google Images search
+    # Get key at https://serpapi.com/ (100 free searches/month)
+    serpapi_key: str = ""
+
+    # Optional: Google Custom Search API for product images
+    # Setup: https://programmablesearch.google.com/ (enable Image Search) +
+    #        https://console.developers.google.com/ (get API key)
+    # Free tier: 100 queries/day
+    google_api_key: str = ""
+    google_cse_id: str = ""
+
+    # Optional: Rakuten Ichiba API (free – register at https://webservice.rakuten.co.jp/)
+    rakuten_app_id: str = ""
+
+    # Optional: Yahoo Shopping JP API (free – register at https://developer.yahoo.co.jp/)
+    yahoo_jp_app_id: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
