@@ -15,6 +15,7 @@ import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 
 import { searchByImage, searchByText } from '../lib/api';
@@ -25,7 +26,7 @@ import LoadingOverlay from '../components/LoadingOverlay';
 import { Colors } from '../constants/colors';
 import { hapticImpact, hapticNotification, hapticSelection } from '../lib/haptics';
 
-type Mode = 'text' | 'image';
+type Mode = 'text' | 'image' | 'barcode';
 
 const TRENDING: { label: string; icon: string }[] = [
   { label: 'Nintendo Switch OLED', icon: '🎮' },
@@ -47,6 +48,8 @@ export default function SearchScreen() {
   const [error, setError]           = useState<string | null>(null);
   const [history, setHistory]       = useState<HistoryItem[]>(() => getHistory());
   const [favorites, setFavorites]   = useState<FavoriteItem[]>(() => getFavorites());
+  const [scanned, setScanned]       = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const coldStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshHistory = useCallback(() => setHistory(getHistory()), []);
@@ -112,7 +115,30 @@ export default function SearchScreen() {
     }
   };
 
-  const switchMode = (m: Mode) => { hapticSelection(); setMode(m); setError(null); };
+  const switchMode = (m: Mode) => { hapticSelection(); setMode(m); setError(null); setScanned(false); };
+
+  const handleSwitchToBarcode = async () => {
+    hapticSelection();
+    if (!cameraPermission?.granted) {
+      const { granted } = await requestCameraPermission();
+      if (!granted) {
+        Alert.alert('需要相機權限', '請在設定中允許使用相機以掃描條碼');
+        return;
+      }
+    }
+    setScanned(false);
+    setMode('barcode');
+    setError(null);
+  };
+
+  const handleBarcodeScanned = ({ data }: { data: string }) => {
+    if (scanned) return;
+    setScanned(true);
+    hapticImpact(Haptics.ImpactFeedbackStyle.Heavy);
+    setMode('text');
+    setQuery(data);
+    handleTextSearch(data);
+  };
 
   const handleClearHistory = () => {
     hapticSelection();
@@ -168,19 +194,18 @@ export default function SearchScreen() {
 
         {/* ── Mode tabs ────────────────────────────────────────────── */}
         <View style={s.tabBar}>
-          {(['text', 'image'] as Mode[]).map((m) => (
-            <TouchableOpacity
-              key={m}
-              style={[s.tab, mode === m && s.tabActive]}
-              onPress={() => switchMode(m)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name={m === 'text' ? 'search' : 'camera'} size={16} color={mode === m ? Colors.primary : Colors.textSecondary} />
-              <Text style={[s.tabLabel, mode === m && s.tabLabelActive]}>
-                {m === 'text' ? '文字搜尋' : '圖片搜尋'}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          <TouchableOpacity style={[s.tab, mode === 'text' && s.tabActive]} onPress={() => switchMode('text')} activeOpacity={0.8}>
+            <Ionicons name="search" size={16} color={mode === 'text' ? Colors.primary : Colors.textSecondary} />
+            <Text style={[s.tabLabel, mode === 'text' && s.tabLabelActive]}>文字搜尋</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.tab, mode === 'image' && s.tabActive]} onPress={() => switchMode('image')} activeOpacity={0.8}>
+            <Ionicons name="camera" size={16} color={mode === 'image' ? Colors.primary : Colors.textSecondary} />
+            <Text style={[s.tabLabel, mode === 'image' && s.tabLabelActive]}>圖片搜尋</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.tab, mode === 'barcode' && s.tabActive]} onPress={handleSwitchToBarcode} activeOpacity={0.8}>
+            <Ionicons name="barcode-outline" size={16} color={mode === 'barcode' ? Colors.primary : Colors.textSecondary} />
+            <Text style={[s.tabLabel, mode === 'barcode' && s.tabLabelActive]}>掃條碼</Text>
+          </TouchableOpacity>
         </View>
 
         {/* ── Text mode ────────────────────────────────────────────── */}
@@ -275,6 +300,34 @@ export default function SearchScreen() {
           </View>
         )}
 
+        {/* ── Barcode mode ─────────────────────────────────────────── */}
+        {mode === 'barcode' && (
+          <View style={s.card}>
+            <View style={s.scannerWrap}>
+              <CameraView
+                style={s.scanner}
+                facing="back"
+                barcodeScannerSettings={{ barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e', 'qr', 'code128', 'code39'] }}
+                onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+              />
+              {/* Frame overlay */}
+              <View style={s.scanFrame} pointerEvents="none">
+                <View style={[s.corner, s.cornerTL]} />
+                <View style={[s.corner, s.cornerTR]} />
+                <View style={[s.corner, s.cornerBL]} />
+                <View style={[s.corner, s.cornerBR]} />
+              </View>
+            </View>
+            <Text style={s.scanHint}>將條碼對準框內，自動識別後開始比價</Text>
+            {scanned && (
+              <TouchableOpacity style={s.btn} onPress={() => setScanned(false)} activeOpacity={0.8}>
+                <Ionicons name="refresh" size={18} color="#fff" />
+                <Text style={s.btnText}>重新掃描</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
         {/* ── Error ────────────────────────────────────────────────── */}
         {error && (
           <View style={s.errorBox}>
@@ -343,10 +396,10 @@ export default function SearchScreen() {
         <View style={s.tipsCard}>
           <Text style={s.tipsTitle}>💡 使用說明</Text>
           {[
-            ['🏬', '比較 8 個以上台日電商平台'],
+            ['🏬', '比較 10 個以上台日電商平台'],
             ['💱', '即時日圓匯率，退稅 10% 試算'],
-            ['🤖', '支援文字搜尋與商品圖片辨識'],
-            ['🚢', '比較結果納入運費參考試算'],
+            ['📷', '支援文字、商品圖片辨識、條碼掃描'],
+            ['📤', '比較結果可一鍵分享給親友'],
           ].map(([icon, text]) => (
             <View key={text} style={s.tipRow}>
               <Text style={s.tipIcon}>{icon}</Text>
@@ -483,4 +536,18 @@ const s = StyleSheet.create({
   tipRow:    { flexDirection: 'row', alignItems: 'center', gap: 10 },
   tipIcon:   { fontSize: 16, width: 24 },
   tipText:   { fontSize: 13, color: Colors.textSecondary, flex: 1, lineHeight: 19 },
+
+  /* barcode scanner */
+  scannerWrap: { borderRadius: 12, overflow: 'hidden', position: 'relative', height: 240 },
+  scanner:     { width: '100%', height: '100%' },
+  scanFrame: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  corner: { position: 'absolute', width: 28, height: 28, borderColor: Colors.primary, borderWidth: 3 },
+  cornerTL: { top: '20%', left: '10%', borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 4 },
+  cornerTR: { top: '20%', right: '10%', borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 4 },
+  cornerBL: { bottom: '20%', left: '10%', borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 4 },
+  cornerBR: { bottom: '20%', right: '10%', borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 4 },
+  scanHint: { fontSize: 13, color: Colors.textSecondary, textAlign: 'center', lineHeight: 19 },
 });

@@ -29,6 +29,12 @@
           "cameraPermission": "允許使用相機拍攝商品圖片"
         }
       ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "允許使用相機掃描商品條碼"
+        }
+      ],
       "expo-asset"
     ],
     "extra": {

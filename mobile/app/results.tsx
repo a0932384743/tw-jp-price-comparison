@@ -2,12 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Image,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -186,6 +188,37 @@ export default function ResultsScreen() {
     setFavorited(nowFav);
   };
 
+  const handleShare = async () => {
+    if (!data) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const { keyword_mapping: km, advice: adv, exchange_rate_jpy_twd: rate } = data;
+    const twPrice = adv.tw_average_price_twd;
+    const jpPrice = adv.jp_tax_free_price_twd;
+    const twStr = twPrice ? `NT$${Math.round(twPrice).toLocaleString()}` : '—';
+    const jpStr = jpPrice ? `NT$${Math.round(jpPrice).toLocaleString()}（退稅後）` : '—';
+    const savings = twPrice && jpPrice ? Math.abs(twPrice - jpPrice) : null;
+    const savingsStr = savings && savings > 100
+      ? `💰 可省約 NT$${Math.round(savings).toLocaleString()}`
+      : '';
+    const rateStr = `1 JPY = ${rate.toFixed(3)} TWD`;
+
+    const message = [
+      `📦 ${km.refined_tw_keyword}`,
+      `🇯🇵 ${km.refined_jp_keyword}`,
+      '',
+      `🇹🇼 台灣均價：${twStr}`,
+      `🇯🇵 日本退稅後：${jpStr}`,
+      savingsStr,
+      '',
+      adv.verdict,
+      '',
+      `（匯率：${rateStr}）`,
+      '── 台日比價 AI 顧問',
+    ].filter(Boolean).join('\n');
+
+    await Share.share({ message });
+  };
+
   const sortedTW = useMemo(
     () => [...(data?.tw_listings ?? [])].sort((a, b) => a.price - b.price),
     [data]
@@ -219,9 +252,14 @@ export default function ResultsScreen() {
             <Ionicons name="pricetag" size={11} color="#fff" />
             <Text style={s.categoryText}>{keyword_mapping.category}</Text>
           </View>
-          <TouchableOpacity onPress={handleToggleFavorite} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name={favorited ? 'heart' : 'heart-outline'} size={22} color={favorited ? '#F87171' : 'rgba(255,255,255,0.6)'} />
-          </TouchableOpacity>
+          <View style={s.headerActions}>
+            <TouchableOpacity onPress={handleShare} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="share-outline" size={22} color="rgba(255,255,255,0.7)" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleToggleFavorite} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name={favorited ? 'heart' : 'heart-outline'} size={22} color={favorited ? '#F87171' : 'rgba(255,255,255,0.6)'} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Product image + names side by side */}
@@ -307,6 +345,7 @@ const s = StyleSheet.create({
   /* product header */
   productHeader: { padding: 16, paddingTop: 20, gap: 8 },
   headerTopRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   headerBottomRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 2 },
   headerMain:   { flexDirection: 'row', alignItems: 'center', gap: 14 },
   headerImage:  { width: 88, height: 88, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.1)', flexShrink: 0 },
