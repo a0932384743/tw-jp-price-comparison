@@ -16,6 +16,7 @@ import json
 import logging
 import random
 import re
+import time
 from urllib.parse import quote
 
 import httpx
@@ -108,6 +109,8 @@ async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceL
         f"?q={quote(keyword)}&page=1&sort=price/ac"
     )
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [PChome] querying '%s'", keyword)
         resp = await client.get(url, headers=_HEADERS_TW, timeout=15)
         resp.raise_for_status()
         data = resp.json()
@@ -133,10 +136,10 @@ async def _scrape_pchome(client: httpx.AsyncClient, keyword: str) -> list[PriceL
                     image_url=image_url,
                 ))
         results = _filter_outliers(results)[:5]
-        logger.info("PChome: %d results for '%s'", len(results), keyword)
+        logger.info("← [PChome] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("PChome scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [PChome] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
@@ -147,6 +150,8 @@ async def _scrape_momo(client: httpx.AsyncClient, keyword: str) -> list[PriceLis
         f"?keyword={quote(keyword)}&searchType=1&cateLevel=0&ent=k&userIN={quote(keyword)}"
     )
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [momo] querying '%s'", keyword)
         resp = await client.get(url, headers=_HEADERS_TW, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -175,10 +180,10 @@ async def _scrape_momo(client: httpx.AsyncClient, keyword: str) -> list[PriceLis
             except (ValueError, AttributeError):
                 continue
         results = _filter_outliers(results)[:5]
-        logger.info("momo: %d results for '%s'", len(results), keyword)
+        logger.info("← [momo] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("momo scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [momo] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
@@ -192,6 +197,8 @@ async def _scrape_shopee_tw(client: httpx.AsyncClient, keyword: str) -> list[Pri
         f"&order=desc&page_type=search&scenario=PAGE_GLOBAL_SEARCH&version=2"
     )
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [蝦皮] querying '%s'", keyword)
         resp = await client.get(url, headers={
             **_HEADERS_TW,
             "Accept": "application/json",
@@ -225,10 +232,10 @@ async def _scrape_shopee_tw(client: httpx.AsyncClient, keyword: str) -> list[Pri
                     image_url=image_url,
                 ))
         results = _filter_outliers(results)[:5]
-        logger.info("Shopee TW: %d results for '%s'", len(results), keyword)
+        logger.info("← [蝦皮] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("Shopee TW scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [蝦皮] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
@@ -236,6 +243,8 @@ async def _scrape_yahoo_tw(client: httpx.AsyncClient, keyword: str) -> list[Pric
     """Yahoo購物中心 (Taiwan) HTML search."""
     url = f"https://tw.buy.yahoo.com/search/product?p={quote(keyword)}&sort=pop"
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [Yahoo TW] querying '%s'", keyword)
         resp = await client.get(url, headers=_HEADERS_TW, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -266,50 +275,48 @@ async def _scrape_yahoo_tw(client: httpx.AsyncClient, keyword: str) -> list[Pric
             except (ValueError, AttributeError):
                 continue
         results = _filter_outliers(results)[:5]
-        logger.info("Yahoo TW: %d results for '%s'", len(results), keyword)
+        logger.info("← [Yahoo TW] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("Yahoo TW scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [Yahoo TW] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
-async def _scrape_tsannkuen(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
-    """燦坤3C – semi-public JSON search API, sorted by price ascending."""
+async def _scrape_ruten_tw(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """露天拍賣 – public JSON API, sorted by price ascending, no auth required."""
+    t0 = time.perf_counter()
     url = (
-        f"https://www.tkec.com.tw/api/catalog/v1/products/search"
-        f"?keyword={quote(keyword)}&sortField=price&sortOrder=asc&pageSize=8&page=1"
+        f"https://rtapi.ruten.com.tw/api/search/v3/index.php/core/prod"
+        f"?q={quote(keyword)}&type=direct&start=0&limit=10&sort=prc_asc"
     )
     try:
-        resp = await client.get(url, headers={**_HEADERS_TW, "Accept": "application/json"}, timeout=15)
+        logger.info("→ [露天拍賣] querying '%s'", keyword)
+        resp = await client.get(url, headers=_HEADERS_TW, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         results: list[PriceListing] = []
-        items = (
-            data.get("data", {}).get("products")
-            or data.get("products")
-            or data.get("items")
-            or []
-        )
-        for item in items[:8]:
-            name = (item.get("name") or item.get("title") or "").strip()
-            price = item.get("price") or item.get("salePrice") or item.get("minPrice") or 0
-            prod_id = item.get("id") or item.get("productId") or ""
-            img = item.get("imageUrl") or item.get("image") or item.get("thumbnail") or ""
-            image_url = img if img and img.startswith("http") else None
+        for row in data.get("Rows", [])[:8]:
+            name = (row.get("Name") or "").strip()
+            price_range = row.get("PriceRange") or {}
+            price = price_range.get("Lowest") or price_range.get("Highest") or 0
+            prod_id = row.get("Id", "")
+            images = row.get("Image") or {}
+            img = images.get("Url") or ""
+            image_url = img if img.startswith("https://") else None
             if name and price:
                 results.append(PriceListing(
-                    platform="燦坤3C",
+                    platform="露天拍賣",
                     title=name,
                     price=float(price),
                     currency="TWD",
-                    url=f"https://www.tkec.com.tw/product/{prod_id}" if prod_id else "https://www.tkec.com.tw",
+                    url=f"https://goods.ruten.com.tw/item/show?{prod_id}" if prod_id else "https://www.ruten.com.tw",
                     image_url=image_url,
                 ))
         results = _filter_outliers(results)[:5]
-        logger.info("燦坤3C: %d results for '%s'", len(results), keyword)
+        logger.info("← [露天拍賣] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("燦坤3C scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [露天拍賣] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
@@ -319,6 +326,8 @@ async def _scrape_rakuten_jp(client: httpx.AsyncClient, keyword: str) -> list[Pr
     """楽天市場 HTML search."""
     url = f"https://search.rakuten.co.jp/search/mall/{quote(keyword)}/"
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [楽天HTML] querying '%s'", keyword)
         resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -354,10 +363,10 @@ async def _scrape_rakuten_jp(client: httpx.AsyncClient, keyword: str) -> list[Pr
             except (ValueError, AttributeError):
                 continue
         results = _filter_outliers(results)[:5]
-        logger.info("Rakuten: %d results for '%s'", len(results), keyword)
+        logger.info("← [楽天HTML] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("Rakuten scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [楽天HTML] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
@@ -365,6 +374,8 @@ async def _scrape_yahoo_shopping_jp(client: httpx.AsyncClient, keyword: str) -> 
     """Yahoo!ショッピング – try __NEXT_DATA__ JSON first, then HTML fallback."""
     url = f"https://shopping.yahoo.co.jp/search?p={quote(keyword)}&sort=-score"
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [Yahoo JP HTML] querying '%s'", keyword)
         resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -402,7 +413,7 @@ async def _scrape_yahoo_shopping_jp(client: httpx.AsyncClient, keyword: str) -> 
                             image_url=image_url,
                         ))
                 if results:
-                    logger.info("Yahoo Shopping (JSON): %d results for '%s'", len(results), keyword)
+                    logger.info("← [Yahoo JP HTML] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
                     return results
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
@@ -440,10 +451,10 @@ async def _scrape_yahoo_shopping_jp(client: httpx.AsyncClient, keyword: str) -> 
             except (ValueError, AttributeError):
                 continue
 
-        logger.info("Yahoo Shopping (HTML): %d results for '%s'", len(results), keyword)
+        logger.info("← [Yahoo JP HTML] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("Yahoo Shopping JP scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [Yahoo JP HTML] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
@@ -451,6 +462,8 @@ async def _scrape_amazon_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
     """Amazon Japan HTML search – uses CloudFront CDN, less aggressively blocked."""
     url = f"https://www.amazon.co.jp/s?k={quote(keyword)}&language=ja_JP"
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [Amazon JP] querying '%s'", keyword)
         resp = await client.get(url, headers={
             **_HEADERS_JP,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -484,10 +497,10 @@ async def _scrape_amazon_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
             except (ValueError, AttributeError):
                 continue
         results = _filter_outliers(results)[:5]
-        logger.info("Amazon JP: %d results for '%s'", len(results), keyword)
+        logger.info("← [Amazon JP] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("Amazon JP scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [Amazon JP] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
@@ -495,6 +508,8 @@ async def _scrape_kakaku_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
     """価格.com (Kakaku) – Japan's largest price comparison site."""
     url = f"https://kakaku.com/search_results/{quote(keyword)}/?category=&stype=0&tab=product"
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [Kakaku] querying '%s'", keyword)
         resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -525,10 +540,10 @@ async def _scrape_kakaku_jp(client: httpx.AsyncClient, keyword: str) -> list[Pri
             except (ValueError, AttributeError):
                 continue
         results = _filter_outliers(results)[:5]
-        logger.info("Kakaku JP: %d results for '%s'", len(results), keyword)
+        logger.info("← [Kakaku] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("Kakaku JP scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [Kakaku] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
@@ -680,6 +695,8 @@ async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: s
         f"&sort=%2BitemPrice&format=json&availability=1"
     )
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [Rakuten API] querying '%s'", keyword)
         resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
         resp.raise_for_status()
         data = resp.json()
@@ -712,10 +729,10 @@ async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: s
                     data_source="scraped",
                 ))
         results = _filter_outliers(results)[:5]
-        logger.info("Rakuten API: %d results for '%s'", len(results), keyword)
+        logger.info("← [Rakuten API] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("Rakuten API failed for '%s': %s", keyword, exc)
+        logger.warning("← [Rakuten API] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
@@ -730,6 +747,8 @@ async def _scrape_yahoo_shopping_jp_api(client: httpx.AsyncClient, keyword: str,
         f"?appid={app_id}&query={quote(keyword)}&results=8&sort=%2Bprice"
     )
     try:
+        t0 = time.perf_counter()
+        logger.info("→ [Yahoo JP API] querying '%s'", keyword)
         resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
         resp.raise_for_status()
         data = resp.json()
@@ -757,101 +776,17 @@ async def _scrape_yahoo_shopping_jp_api(client: httpx.AsyncClient, keyword: str,
                     data_source="scraped",
                 ))
         results = _filter_outliers(results)[:5]
-        logger.info("Yahoo Shopping API: %d results for '%s'", len(results), keyword)
+        logger.info("← [Yahoo JP API] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
         return results
     except Exception as exc:
-        logger.warning("Yahoo Shopping API failed for '%s': %s", keyword, exc)
-        return []
-
-
-# ── Japan extra scrapers ─────────────────────────────────────────────────────
-
-async def _scrape_yodobashi(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
-    """ヨドバシカメラ HTML search."""
-    url = f"https://www.yodobashi.com/?word={quote(keyword)}"
-    try:
-        resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        results: list[PriceListing] = []
-        for card in soup.select("li.js_productListItem, li.prdLstItems, div.prdLstItem")[:8]:
-            title_el = card.select_one("p.elCardMainTitle, .prdName, h2 a, h3 a, p[class*='name']")
-            price_el = card.select_one("span.this_price, .price, [class*='price'] span, strong")
-            link_el = card.select_one("a[href]")
-            img_el = card.select_one("img[src]")
-            if not (title_el and price_el):
-                continue
-            try:
-                price_raw = "".join(c for c in price_el.text if c.isdigit())
-                if not price_raw:
-                    continue
-                href = link_el.get("href", "") if link_el else ""
-                full_url = href if href.startswith("http") else f"https://www.yodobashi.com{href}"
-                raw_img = img_el.get("src") if img_el else None
-                image_url = raw_img if raw_img and raw_img.startswith("http") else None
-                results.append(PriceListing(
-                    platform="ヨドバシカメラ",
-                    title=title_el.text.strip(),
-                    price=float(price_raw),
-                    currency="JPY",
-                    url=full_url,
-                    image_url=image_url,
-                ))
-            except (ValueError, AttributeError):
-                continue
-        results = _filter_outliers(results)[:5]
-        logger.info("Yodobashi: %d results for '%s'", len(results), keyword)
-        return results
-    except Exception as exc:
-        logger.warning("Yodobashi scrape failed for '%s': %s", keyword, exc)
-        return []
-
-
-async def _scrape_biccamera(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
-    """ビックカメラ HTML search."""
-    url = f"https://www.biccamera.com/bc/s/?q={quote(keyword)}"
-    try:
-        resp = await client.get(url, headers=_HEADERS_JP, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        results: list[PriceListing] = []
-        for card in soup.select("li.js_goods_item, li.itembox, div.goodsbox, li[class*='item']")[:8]:
-            title_el = card.select_one("p.goods_name, .item_name, h2 a, h3 a, a[class*='name']")
-            price_el = card.select_one("span.bc-value, .price, [class*='price'], strong")
-            link_el = card.select_one("a[href]")
-            img_el = card.select_one("img[src]")
-            if not (title_el and price_el):
-                continue
-            try:
-                price_raw = "".join(c for c in price_el.text if c.isdigit())
-                if not price_raw:
-                    continue
-                href = link_el.get("href", "") if link_el else ""
-                full_url = href if href.startswith("http") else f"https://www.biccamera.com{href}"
-                raw_img = img_el.get("src") if img_el else None
-                image_url = raw_img if raw_img and raw_img.startswith("http") else None
-                results.append(PriceListing(
-                    platform="ビックカメラ",
-                    title=title_el.text.strip(),
-                    price=float(price_raw),
-                    currency="JPY",
-                    url=full_url,
-                    image_url=image_url,
-                ))
-            except (ValueError, AttributeError):
-                continue
-        results = _filter_outliers(results)[:5]
-        logger.info("BIC Camera: %d results for '%s'", len(results), keyword)
-        return results
-    except Exception as exc:
-        logger.warning("BIC Camera scrape failed for '%s': %s", keyword, exc)
+        logger.warning("← [Yahoo JP API] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
         return []
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
 async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
-    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW + 燦坤3C, with Gemini fallback."""
+    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW + 露天拍賣, with Gemini fallback."""
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock TW prices for '%s'", keyword)
@@ -864,7 +799,7 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
             _scrape_momo(client, keyword),
             _scrape_shopee_tw(client, keyword),
             _scrape_yahoo_tw(client, keyword),
-            _scrape_tsannkuen(client, keyword),
+            _scrape_ruten_tw(client, keyword),
         )
     combined = [r for src in results_per_source for r in src]
     for listing in combined:
@@ -886,7 +821,7 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
     Priority:
     1. Rakuten Ichiba API  (if RAKUTEN_APP_ID is set) → real product images
     2. Yahoo Shopping API  (if YAHOO_JP_APP_ID is set) → real product images
-    3. HTML scrapers (Rakuten / Yahoo / Amazon / Kakaku / Yodobashi / BIC Camera)
+    3. HTML scrapers (Rakuten / Yahoo / Amazon / Kakaku)
     4. Gemini Search fallback
     """
     settings = get_settings()
@@ -913,8 +848,6 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         tasks += [
             _scrape_amazon_jp(client, keyword),
             _scrape_kakaku_jp(client, keyword),
-            _scrape_yodobashi(client, keyword),
-            _scrape_biccamera(client, keyword),
         ]
         results_per_source = await asyncio.gather(*tasks)
 
