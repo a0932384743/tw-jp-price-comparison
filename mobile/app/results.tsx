@@ -277,6 +277,12 @@ export default function ResultsScreen() {
           </View>
         </View>
 
+        {keyword_mapping.product_description && (
+          <Text style={s.productDesc} numberOfLines={3}>
+            {keyword_mapping.product_description}
+          </Text>
+        )}
+
         <View style={s.headerBottomRow}>
           <View style={s.rateChip}>
             <Ionicons name="swap-horizontal" size={12} color="rgba(255,255,255,0.7)" />
@@ -358,6 +364,7 @@ const s = StyleSheet.create({
   categoryText: { fontSize: 11, fontWeight: '700', color: '#fff' },
   productName:  { fontSize: 18, fontWeight: '900', color: '#fff', lineHeight: 25 },
   jpKeyword:    { fontSize: 12, color: 'rgba(255,255,255,0.75)' },
+  productDesc:  { fontSize: 12, color: 'rgba(255,255,255,0.7)', lineHeight: 18 },
   rateChip: {
     flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
     backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 20,

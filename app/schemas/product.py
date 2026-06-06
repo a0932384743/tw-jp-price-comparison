@@ -12,6 +12,10 @@ class KeywordMapping(BaseModel):
     refined_tw_keyword: str = Field(description="Standardised Traditional Chinese product name")
     refined_jp_keyword: str = Field(description="Optimised Japanese product name / model number")
     category: str = Field(description="Product category (e.g. 電子產品, 美妝, 食品)")
+    product_description: Optional[str] = Field(
+        default=None,
+        description="2-3 sentence product introduction in Traditional Chinese",
+    )
 
 
 # --------------------------------------------------------------------------- #
