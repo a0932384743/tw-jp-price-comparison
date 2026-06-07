@@ -14,25 +14,34 @@ interface Props {
 }
 
 const PLATFORM_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-  'momo購物網':          'storefront',
-  '蝦皮購物':            'cart',
-  'PChome 24h':         'cube',
-  'Yahoo購物中心':       'storefront-outline',
-  '露天拍賣':            'pricetags',
+  'momo':               'storefront',
+  '蝦皮':               'cart',
+  'shopee':             'cart',
+  'pchome':             'cube',
+  'yahoo':              'pricetag',
+  '露天':               'pricetags',
   '博客來':             'book',
-  'UNIQLO 台灣':        'shirt-outline',
-  'UNIQLO 日本':        'shirt-outline',
-  'GU 台灣':            'shirt',
-  'GU 日本':            'shirt',
-  'Nike 台灣':          'footsteps',
-  'Nike 日本':          'footsteps',
-  'Adidas 台灣':        'walk',
-  'Adidas 日本':        'walk',
-  'Amazon Japan':       'logo-amazon',
-  '楽天市場':           'gift',
-  'Yahoo!ショッピング': 'pricetag',
-  '価格.com':           'bar-chart',
+  'uniqlo':             'shirt-outline',
+  'gu ':                'shirt',
+  ' gu':                'shirt',
+  'nike':               'footsteps',
+  'adidas':             'walk',
+  'amazon':             'logo-amazon',
+  '楽天':               'gift',
+  'rakuten':            'gift',
+  'kakaku':             'bar-chart',
+  '価格':               'bar-chart',
+  'apple':              'logo-apple',
+  'google shopping':    'search',
 };
+
+function _icon(platform: string): keyof typeof Ionicons.glyphMap {
+  const pl = platform.toLowerCase();
+  for (const [key, icon] of Object.entries(PLATFORM_ICONS)) {
+    if (pl.includes(key.trim().toLowerCase())) return icon;
+  }
+  return 'cart-outline';
+}
 
 function fmtTWD(n: number) { return `NT$${Math.round(n).toLocaleString('zh-TW')}`; }
 function fmtJPY(n: number) { return `¥${Math.round(n).toLocaleString('ja-JP')}`; }
@@ -40,7 +49,7 @@ function fmtJPY(n: number) { return `¥${Math.round(n).toLocaleString('ja-JP')}`
 export default function PlatformCard({ listing, market, exchangeRate, isCheapest, thumbnailUrl }: Props) {
   const [imgError,   setImgError]   = useState(false);
   const [imgLoaded,  setImgLoaded]  = useState(false);
-  const iconName    = PLATFORM_ICONS[listing.platform] ?? 'cart-outline';
+  const iconName    = _icon(listing.platform);
   const accentColor = market === 'TW' ? Colors.tw : Colors.jp;
 
   const jpTWD     = market === 'JP' ? listing.price * exchangeRate : null;

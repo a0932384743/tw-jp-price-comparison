@@ -1042,6 +1042,106 @@ def _platform_search_url(platform: str, keyword: str) -> str:
     return f"https://www.google.com/search?q={quote(platform)}+{kw}&tbm=shop"
 
 
+# ── SerpAPI Google Shopping (works from any cloud IP) ───────────────────────
+
+async def _scrape_serpapi_tw(client: httpx.AsyncClient, keyword: str, api_key: str) -> list[PriceListing]:
+    """Google Shopping Taiwan via SerpApi – bypasses IP blocks, free tier = 100/month.
+
+    Returns real storefront prices aggregated by Google Shopping (gl=tw, currency=TWD).
+    """
+    t0 = time.perf_counter()
+    logger.info("→ [SerpAPI TW] querying '%s'", keyword)
+    try:
+        resp = await client.get(
+            "https://serpapi.com/search.json",
+            params={"engine": "google_shopping", "q": keyword,
+                    "gl": "tw", "hl": "zh-tw", "api_key": api_key, "num": 10},
+            timeout=20,
+        )
+        if resp.status_code == 429:
+            logger.warning("SerpApi monthly quota reached (TW shopping)")
+            return []
+        resp.raise_for_status()
+        results: list[PriceListing] = []
+        for item in resp.json().get("shopping_results", [])[:10]:
+            title = (item.get("title") or "").strip()
+            price_str = item.get("price") or ""
+            price_digits = re.sub(r"[^\d]", "", price_str)
+            if not title or not price_digits:
+                continue
+            price = float(price_digits)
+            if price < 10:
+                continue
+            source = item.get("source") or "Google Shopping"
+            link = (item.get("link") or item.get("product_link")
+                    or f"https://www.google.com/search?q={quote(keyword)}&tbm=shop")
+            thumb = item.get("thumbnail") or None
+            results.append(PriceListing(
+                platform=source,
+                title=title,
+                price=price,
+                currency="TWD",
+                url=link,
+                image_url=thumb if thumb and str(thumb).startswith("https://") else None,
+                data_source="scraped",
+            ))
+        results = _filter_outliers(results)[:5]
+        logger.info("← [SerpAPI TW] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [SerpAPI TW] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
+async def _scrape_serpapi_jp(client: httpx.AsyncClient, keyword: str, api_key: str) -> list[PriceListing]:
+    """Google Shopping Japan via SerpApi – bypasses IP blocks, free tier = 100/month.
+
+    Returns real storefront prices aggregated by Google Shopping (gl=jp, currency=JPY).
+    """
+    t0 = time.perf_counter()
+    logger.info("→ [SerpAPI JP] querying '%s'", keyword)
+    try:
+        resp = await client.get(
+            "https://serpapi.com/search.json",
+            params={"engine": "google_shopping", "q": keyword,
+                    "gl": "jp", "hl": "ja", "api_key": api_key, "num": 10},
+            timeout=20,
+        )
+        if resp.status_code == 429:
+            logger.warning("SerpApi monthly quota reached (JP shopping)")
+            return []
+        resp.raise_for_status()
+        results: list[PriceListing] = []
+        for item in resp.json().get("shopping_results", [])[:10]:
+            title = (item.get("title") or "").strip()
+            price_str = item.get("price") or ""
+            price_digits = re.sub(r"[^\d]", "", price_str)
+            if not title or not price_digits:
+                continue
+            price = float(price_digits)
+            if price < 10:
+                continue
+            source = item.get("source") or "Google Shopping JP"
+            link = (item.get("link") or item.get("product_link")
+                    or f"https://www.google.co.jp/search?q={quote(keyword)}&tbm=shop")
+            thumb = item.get("thumbnail") or None
+            results.append(PriceListing(
+                platform=source,
+                title=title,
+                price=price,
+                currency="JPY",
+                url=link,
+                image_url=thumb if thumb and str(thumb).startswith("https://") else None,
+                data_source="scraped",
+            ))
+        results = _filter_outliers(results)[:5]
+        logger.info("← [SerpAPI JP] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [SerpAPI JP] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
 # ── Japan official APIs (free, require registration) ────────────────────────
 
 async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: str) -> list[PriceListing]:
@@ -1160,8 +1260,15 @@ async def fetch_tw_prices(keyword: str, brand_platforms: list[str] | None = None
         return _mock_tw_prices(keyword)
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        scraper_labels = ["PChome", "momo", "蝦皮", "Yahoo TW", "露天拍賣"]
-        tasks = [
+        scraper_labels: list[str] = []
+        tasks = []
+        # SerpAPI Google Shopping works from any cloud IP — use as primary when key is set
+        if settings.serpapi_key:
+            scraper_labels.append("Google Shopping TW")
+            tasks.append(_scrape_serpapi_tw(client, keyword, settings.serpapi_key))
+        # HTML/JSON scrapers as supplement (may 403 on cloud IPs but kept for coverage)
+        scraper_labels += ["PChome", "momo", "蝦皮", "Yahoo TW", "露天拍賣"]
+        tasks += [
             _scrape_pchome(client, keyword),
             _scrape_momo(client, keyword),
             _scrape_shopee_tw(client, keyword),
@@ -1223,8 +1330,13 @@ async def fetch_jp_prices(keyword: str, brand_platforms: list[str] | None = None
         return _mock_jp_prices(keyword)
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        tasks = []
-        scraper_labels = []
+        tasks: list = []
+        scraper_labels: list[str] = []
+        # SerpAPI Google Shopping works from any cloud IP — use as primary when key is set
+        if settings.serpapi_key:
+            scraper_labels.append("Google Shopping JP")
+            tasks.append(_scrape_serpapi_jp(client, keyword, settings.serpapi_key))
+        # Official free APIs (designed for server use, no IP blocking)
         if settings.rakuten_app_id:
             scraper_labels.append("楽天API"); tasks.append(_scrape_rakuten_api(client, keyword, settings.rakuten_app_id))
         else:
