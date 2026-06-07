@@ -3,6 +3,7 @@ export interface KeywordMapping {
   refined_jp_keyword: string;
   category: string;
   product_description?: string | null;
+  brand_platforms?: string[] | null;
 }
 
 export interface PriceListing {

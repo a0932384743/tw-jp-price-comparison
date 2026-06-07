@@ -203,6 +203,7 @@ async def search(
         tw_was_cached = cached_tw is not None
         jp_was_cached = cached_jp is not None
 
+        brand_platforms = mapping.brand_platforms or []
         if tw_was_cached and jp_was_cached:
             tw_prices, jp_prices = cached_tw, cached_jp
             product_image_url = await fetch_product_thumbnail(mapping.refined_tw_keyword)
@@ -213,8 +214,8 @@ async def search(
             )
         else:
             tw_prices, jp_prices, product_image_url = await asyncio.gather(
-                fetch_tw_prices(mapping.refined_tw_keyword),
-                fetch_jp_prices(mapping.refined_jp_keyword),
+                fetch_tw_prices(mapping.refined_tw_keyword, brand_platforms=brand_platforms),
+                fetch_jp_prices(mapping.refined_jp_keyword, brand_platforms=brand_platforms),
                 fetch_product_thumbnail(mapping.refined_tw_keyword),
             )
             logger.info(

@@ -16,6 +16,10 @@ class KeywordMapping(BaseModel):
         default=None,
         description="2-3 sentence product introduction in Traditional Chinese",
     )
+    brand_platforms: list[str] = Field(
+        default_factory=list,
+        description="Brand-specific platforms to search: 'nike', 'adidas', 'uniqlo', 'gu'",
+    )
 
 
 # --------------------------------------------------------------------------- #

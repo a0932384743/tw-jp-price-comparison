@@ -3,9 +3,11 @@ Price Scraper – Taiwan & Japan e-commerce platforms.
 
 Production runs concurrent real HTTP scrapers:
   Taiwan:  PChome 24h (JSON API) + momo購物網 (HTML) + 蝦皮購物 (API)
-           + Yahoo TW (HTML) + 露天拍賣 (API) + UNIQLO TW (API) + GU TW (API)
+           + Yahoo TW (HTML) + 露天拍賣 (API)
+           + brand stores (UNIQLO TW / GU TW / Nike TW / Adidas TW) when AI selects them
   Japan:   楽天市場 (HTML/API) + Yahoo!ショッピング (HTML/API)
-           + Amazon Japan (HTML) + 価格.com (HTML) + UNIQLO JP (API) + GU JP (API)
+           + Amazon Japan (HTML) + 価格.com (HTML)
+           + brand stores (UNIQLO JP / GU JP / Nike JP / Adidas JP) when AI selects them
 
 Development uses deterministic mock data so the pipeline works
 without hitting live sites (toggle via APP_ENV).
@@ -781,6 +783,230 @@ async def _scrape_gu_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceLi
         return []
 
 
+# ── Brand official websites (Nike & Adidas) ──────────────────────────────────
+
+async def _scrape_nike_tw(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """Nike Taiwan official website – __NEXT_DATA__ JSON then HTML fallback."""
+    t0 = time.perf_counter()
+    url = f"https://www.nike.com/tw/w?q={quote(keyword)}&vst={quote(keyword)}"
+    try:
+        logger.info("→ [Nike TW] querying '%s'", keyword)
+        resp = await client.get(url, headers={**_HEADERS_TW, "Accept": "text/html,application/xhtml+xml"}, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results: list[PriceListing] = []
+
+        next_script = soup.find("script", {"id": "__NEXT_DATA__"})
+        if next_script and next_script.string:
+            try:
+                next_data = json.loads(next_script.string)
+                products = (
+                    next_data.get("props", {}).get("pageProps", {})
+                    .get("initialState", {}).get("Wall", {}).get("products", [])
+                )
+                for prod in products[:8]:
+                    name = prod.get("title", "").strip()
+                    subtitle = prod.get("subtitle", "")
+                    full_name = f"{name} {subtitle}".strip() if subtitle else name
+                    price_data = prod.get("price", {})
+                    price = price_data.get("currentPrice") or price_data.get("fullPrice") or 0
+                    pid = prod.get("cloudProductId") or prod.get("pid") or ""
+                    imgs = prod.get("images") or [{}]
+                    img_url = imgs[0].get("src") if imgs else None
+                    prod_url = f"https://www.nike.com/tw/t/{pid}" if pid else "https://www.nike.com/tw"
+                    if full_name and price:
+                        results.append(PriceListing(
+                            platform="Nike 台灣", title=full_name, price=float(price),
+                            currency="TWD", url=prod_url, image_url=img_url, data_source="scraped",
+                        ))
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                pass
+
+        if not results:
+            for card in soup.select("div.product-card, article.product-card")[:8]:
+                title_el = card.select_one(".product-card__title, [class*='title']")
+                price_el = card.select_one(".product-price, [class*='price']")
+                link_el  = card.select_one("a[href]")
+                img_el   = card.select_one("img[src]")
+                if not (title_el and price_el):
+                    continue
+                try:
+                    price_raw = "".join(c for c in price_el.text if c.isdigit())
+                    if not price_raw:
+                        continue
+                    href = link_el.get("href", "") if link_el else ""
+                    full_url = href if href.startswith("http") else f"https://www.nike.com{href}"
+                    raw_img = img_el.get("src") if img_el else None
+                    results.append(PriceListing(
+                        platform="Nike 台灣", title=title_el.text.strip(), price=float(price_raw),
+                        currency="TWD", url=full_url,
+                        image_url=raw_img if raw_img and raw_img.startswith("http") else None,
+                        data_source="scraped",
+                    ))
+                except (ValueError, AttributeError):
+                    continue
+
+        results = _filter_outliers(results)[:3]
+        logger.info("← [Nike TW] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [Nike TW] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
+async def _scrape_nike_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """Nike Japan official website – __NEXT_DATA__ JSON then HTML fallback."""
+    t0 = time.perf_counter()
+    url = f"https://www.nike.com/jp/w?q={quote(keyword)}&vst={quote(keyword)}"
+    try:
+        logger.info("→ [Nike JP] querying '%s'", keyword)
+        resp = await client.get(url, headers={**_HEADERS_JP, "Accept": "text/html,application/xhtml+xml"}, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results: list[PriceListing] = []
+
+        next_script = soup.find("script", {"id": "__NEXT_DATA__"})
+        if next_script and next_script.string:
+            try:
+                next_data = json.loads(next_script.string)
+                products = (
+                    next_data.get("props", {}).get("pageProps", {})
+                    .get("initialState", {}).get("Wall", {}).get("products", [])
+                )
+                for prod in products[:8]:
+                    name = prod.get("title", "").strip()
+                    subtitle = prod.get("subtitle", "")
+                    full_name = f"{name} {subtitle}".strip() if subtitle else name
+                    price_data = prod.get("price", {})
+                    price = price_data.get("currentPrice") or price_data.get("fullPrice") or 0
+                    pid = prod.get("cloudProductId") or prod.get("pid") or ""
+                    imgs = prod.get("images") or [{}]
+                    img_url = imgs[0].get("src") if imgs else None
+                    prod_url = f"https://www.nike.com/jp/t/{pid}" if pid else "https://www.nike.com/jp"
+                    if full_name and price:
+                        results.append(PriceListing(
+                            platform="Nike 日本", title=full_name, price=float(price),
+                            currency="JPY", url=prod_url, image_url=img_url, data_source="scraped",
+                        ))
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                pass
+
+        if not results:
+            for card in soup.select("div.product-card, article.product-card")[:8]:
+                title_el = card.select_one(".product-card__title, [class*='title']")
+                price_el = card.select_one(".product-price, [class*='price']")
+                link_el  = card.select_one("a[href]")
+                img_el   = card.select_one("img[src]")
+                if not (title_el and price_el):
+                    continue
+                try:
+                    price_raw = "".join(c for c in price_el.text if c.isdigit())
+                    if not price_raw:
+                        continue
+                    href = link_el.get("href", "") if link_el else ""
+                    full_url = href if href.startswith("http") else f"https://www.nike.com{href}"
+                    raw_img = img_el.get("src") if img_el else None
+                    results.append(PriceListing(
+                        platform="Nike 日本", title=title_el.text.strip(), price=float(price_raw),
+                        currency="JPY", url=full_url,
+                        image_url=raw_img if raw_img and raw_img.startswith("http") else None,
+                        data_source="scraped",
+                    ))
+                except (ValueError, AttributeError):
+                    continue
+
+        results = _filter_outliers(results)[:3]
+        logger.info("← [Nike JP] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [Nike JP] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
+async def _scrape_adidas_tw(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """Adidas Taiwan official website – HTML parsing."""
+    t0 = time.perf_counter()
+    url = f"https://shop.adidas.com.tw/search?q={quote(keyword)}"
+    try:
+        logger.info("→ [Adidas TW] querying '%s'", keyword)
+        resp = await client.get(url, headers=_HEADERS_TW, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results: list[PriceListing] = []
+
+        for card in soup.select("li.ProductCard, article[class*='ProductCard'], div[class*='ProductCard']")[:8]:
+            title_el = card.select_one("p[class*='title'], h2, h3, .gl-product-card__name")
+            price_el = card.select_one(".gl-price-item--sale, .gl-price-item, [class*='price']")
+            link_el  = card.select_one("a[href]")
+            img_el   = card.select_one("img[src], img[data-src]")
+            if not (title_el and price_el):
+                continue
+            try:
+                price_raw = "".join(c for c in price_el.text if c.isdigit())
+                if not price_raw:
+                    continue
+                href = link_el.get("href", "") if link_el else ""
+                full_url = href if href.startswith("http") else f"https://shop.adidas.com.tw{href}"
+                raw_img = img_el.get("src") or img_el.get("data-src") if img_el else None
+                results.append(PriceListing(
+                    platform="Adidas 台灣", title=title_el.text.strip(), price=float(price_raw),
+                    currency="TWD", url=full_url,
+                    image_url=raw_img if raw_img and raw_img.startswith("http") else None,
+                    data_source="scraped",
+                ))
+            except (ValueError, AttributeError):
+                continue
+
+        results = _filter_outliers(results)[:3]
+        logger.info("← [Adidas TW] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [Adidas TW] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
+async def _scrape_adidas_jp(client: httpx.AsyncClient, keyword: str) -> list[PriceListing]:
+    """Adidas Japan official website – HTML parsing."""
+    t0 = time.perf_counter()
+    url = f"https://shop.adidas.jp/search/?query={quote(keyword)}"
+    try:
+        logger.info("→ [Adidas JP] querying '%s'", keyword)
+        resp = await client.get(url, headers=_HEADERS_JP, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results: list[PriceListing] = []
+
+        for card in soup.select("li.ProductCard, article[class*='ProductCard'], div[class*='ProductCard']")[:8]:
+            title_el = card.select_one("p[class*='title'], h2, h3, .gl-product-card__name")
+            price_el = card.select_one(".gl-price-item--sale, .gl-price-item, [class*='price']")
+            link_el  = card.select_one("a[href]")
+            img_el   = card.select_one("img[src], img[data-src]")
+            if not (title_el and price_el):
+                continue
+            try:
+                price_raw = "".join(c for c in price_el.text if c.isdigit())
+                if not price_raw:
+                    continue
+                href = link_el.get("href", "") if link_el else ""
+                full_url = href if href.startswith("http") else f"https://shop.adidas.jp{href}"
+                raw_img = img_el.get("src") or img_el.get("data-src") if img_el else None
+                results.append(PriceListing(
+                    platform="Adidas 日本", title=title_el.text.strip(), price=float(price_raw),
+                    currency="JPY", url=full_url,
+                    image_url=raw_img if raw_img and raw_img.startswith("http") else None,
+                    data_source="scraped",
+                ))
+            except (ValueError, AttributeError):
+                continue
+
+        results = _filter_outliers(results)[:3]
+        logger.info("← [Adidas JP] %.2fs → %d results for '%s'", time.perf_counter() - t0, len(results), keyword)
+        return results
+    except Exception as exc:
+        logger.warning("← [Adidas JP] %.2fs → failed for '%s': %s", time.perf_counter() - t0, keyword, exc)
+        return []
+
+
 # ── Platform search URL lookup ───────────────────────────────────────────────
 
 _PLATFORM_SEARCH_URLS: dict[str, str] = {
@@ -814,105 +1040,6 @@ def _platform_search_url(platform: str, keyword: str) -> str:
             return tmpl.format(kw=kw)
     # Generic Google Shopping fallback
     return f"https://www.google.com/search?q={quote(platform)}+{kw}&tbm=shop"
-
-
-# ── Gemini Search fallback (used when all scrapers return 0 results) ─────────
-
-async def _fallback_prices_via_gemini(keyword: str, market: str) -> list[PriceListing]:
-    """Use Gemini + Google Search grounding to find live prices when scrapers fail.
-
-    First tries grounded search (real-time Google results).
-    Falls back to Gemini AI knowledge if grounding is unavailable.
-    """
-    from app.services.gemini_client import generate_with_fallback, search_with_grounding
-
-    settings = get_settings()
-
-    if market == "TW":
-        prompt = (
-            f'Search Google Shopping and Google Search for the LOWEST current retail price of '
-            f'"{keyword}" in Taiwan (台灣).\n'
-            f"Check these platforms: PChome 24h, momo購物網, 蝦皮購物(Shopee), "
-            f"Yahoo購物中心, 燦坤, 博客來.\n\n"
-            f"CRITICAL RULES:\n"
-            f"1. Report the LOWEST available price at each platform (cheapest variant/promotion).\n"
-            f"2. Only include the EXACT product \"{keyword}\" – no accessories, cases, or bundles.\n"
-            f"3. If the product has variants (color/storage/size), use the cheapest variant price.\n"
-            f"4. Prices must be in TWD and reflect what a buyer pays at checkout (before shipping).\n"
-            f"5. Use the most recently observed price – do not guess outdated prices.\n\n"
-            f"Return ONLY a JSON array with NO url field (no markdown, no explanation):\n"
-            f'[{{"platform":"PChome 24h","title":"exact full product name","price":9490,'
-            f'"currency":"TWD"}}]\n\n'
-            f"Include 4-6 results from different stores, sorted cheapest first."
-        )
-        currency = "TWD"
-    else:
-        prompt = (
-            f'Search Google Shopping and Google Search for the LOWEST current retail price of '
-            f'"{keyword}" in Japan (日本).\n'
-            f"Check these platforms: 楽天市場, Yahoo!ショッピング, Amazon.co.jp, "
-            f"ヨドバシカメラ, ビックカメラ, 価格.com.\n\n"
-            f"CRITICAL RULES:\n"
-            f"1. Report the LOWEST available price at each platform (cheapest variant/promotion).\n"
-            f"2. Only include the EXACT product \"{keyword}\" – no accessories or bundles.\n"
-            f"3. If the product has variants (color/storage/capacity), use the cheapest variant.\n"
-            f"4. Prices must be in JPY (tax-included) and reflect the actual checkout price.\n"
-            f"5. Use the most recently observed price – do not guess outdated prices.\n\n"
-            f"Return ONLY a JSON array with NO url field (no markdown, no explanation):\n"
-            f'[{{"platform":"楽天市場","title":"exact full product name","price":37980,'
-            f'"currency":"JPY"}}]\n\n'
-            f"Include 4-6 results from different stores, sorted cheapest first."
-        )
-        currency = "JPY"
-
-    # Try grounded search first (live Google results)
-    text = await search_with_grounding(settings.gemini_api_key, prompt)
-
-    # Fall back to AI knowledge if grounding unavailable
-    if not text:
-        logger.info("Grounding unavailable, using Gemini AI knowledge for '%s' (%s)", keyword, market)
-        try:
-            response, _ = await generate_with_fallback(
-                api_key=settings.gemini_api_key,
-                contents=prompt,
-                generation_config={"temperature": 0.1, "max_output_tokens": 1024},
-            )
-            text = response.text
-        except Exception as exc:
-            logger.warning("Gemini AI price fallback also failed for '%s': %s", keyword, exc)
-            return []
-
-    # Parse JSON from response text
-    try:
-        clean = text.strip()
-        if "```json" in clean:
-            clean = clean.split("```json")[1].split("```")[0].strip()
-        elif "```" in clean:
-            clean = clean.split("```")[1].split("```")[0].strip()
-        start, end = clean.find("["), clean.rfind("]") + 1
-        if start < 0 or end <= start:
-            raise ValueError("No JSON array found in response")
-        items = json.loads(clean[start:end])
-        results = []
-        for item in items:
-            price = float(item.get("price", 0))
-            title = str(item.get("title", "")).strip()
-            platform = str(item.get("platform", "電商平台"))
-            if price > 0 and title:
-                results.append(PriceListing(
-                    platform=platform,
-                    title=title,
-                    price=price,
-                    currency=str(item.get("currency", currency)),
-                    url=_platform_search_url(platform, keyword),
-                    data_source="ai_estimated",
-                ))
-        results.sort(key=lambda l: l.price)
-        logger.info("Gemini fallback (%s): %d results for '%s'", market, len(results), keyword)
-        return results
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("Failed to parse Gemini price response for '%s': %s | text: %.200s", keyword, exc, text)
-        return []
 
 
 # ── Japan official APIs (free, require registration) ────────────────────────
@@ -1019,8 +1146,13 @@ async def _scrape_yahoo_shopping_jp_api(client: httpx.AsyncClient, keyword: str,
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
-    """Return Taiwan listings – PChome + momo + Shopee + Yahoo TW + 露天拍賣 + UNIQLO TW + GU TW."""
+async def fetch_tw_prices(keyword: str, brand_platforms: list[str] | None = None) -> list[PriceListing]:
+    """Return Taiwan listings from real e-commerce platforms only (no AI estimation).
+
+    brand_platforms controls which brand-official stores to include:
+    'uniqlo', 'gu', 'nike', 'adidas'. Pass [] or None to skip all brand stores.
+    """
+    brand_platforms = brand_platforms or []
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock TW prices for '%s'", keyword)
@@ -1028,46 +1160,50 @@ async def fetch_tw_prices(keyword: str) -> list[PriceListing]:
         return _mock_tw_prices(keyword)
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        results_per_source = await asyncio.gather(
+        tasks = [
             _scrape_pchome(client, keyword),
             _scrape_momo(client, keyword),
             _scrape_shopee_tw(client, keyword),
             _scrape_yahoo_tw(client, keyword),
             _scrape_ruten_tw(client, keyword),
-            _scrape_uniqlo_tw(client, keyword),
-            _scrape_gu_tw(client, keyword),
-        )
+        ]
+        if "uniqlo" in brand_platforms:
+            tasks.append(_scrape_uniqlo_tw(client, keyword))
+        if "gu" in brand_platforms:
+            tasks.append(_scrape_gu_tw(client, keyword))
+        if "nike" in brand_platforms:
+            tasks.append(_scrape_nike_tw(client, keyword))
+        if "adidas" in brand_platforms:
+            tasks.append(_scrape_adidas_tw(client, keyword))
+        results_per_source = await asyncio.gather(*tasks)
+
     combined = [r for src in results_per_source for r in src]
     for listing in combined:
         if listing.data_source is None:
             listing.data_source = "scraped"
     await asyncio.sleep(settings.scraper_request_delay)
 
-    if not combined:
-        logger.warning("All TW scrapers returned 0 results for '%s'; falling back to Gemini", keyword)
-        combined = await _fallback_prices_via_gemini(keyword, "TW")
-    else:
-        # 1. Remove listings with no keyword overlap (wrong product)
-        combined = _filter_relevant(combined, keyword)
-        # 2. One card per platform (cheapest wins)
-        combined = _dedup_cheapest_per_platform(combined)
-        # 3. Cross-platform outlier filter (catches accessories priced < 30% of median)
-        combined = _filter_outliers(combined, min_ratio=0.30)
-        combined.sort(key=lambda l: l.price)
+    combined = _filter_relevant(combined, keyword)
+    combined = _dedup_cheapest_per_platform(combined)
+    combined = _filter_outliers(combined, min_ratio=0.30)
+    combined.sort(key=lambda l: l.price)
 
     logger.info("TW total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
 
 
-async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
-    """Return Japan listings – official APIs first, then HTML scrapers.
+async def fetch_jp_prices(keyword: str, brand_platforms: list[str] | None = None) -> list[PriceListing]:
+    """Return Japan listings from real e-commerce platforms only (no AI estimation).
 
-    Priority:
+    Priority for general platforms:
     1. Rakuten Ichiba API  (if RAKUTEN_APP_ID is set) → real product images
     2. Yahoo Shopping API  (if YAHOO_JP_APP_ID is set) → real product images
     3. HTML scrapers (Rakuten / Yahoo / Amazon / Kakaku)
-    4. UNIQLO JP + GU JP (always, official APIs)
+
+    brand_platforms controls which brand-official stores to include:
+    'uniqlo', 'gu', 'nike', 'adidas'. Pass [] or None to skip all brand stores.
     """
+    brand_platforms = brand_platforms or []
     settings = get_settings()
     if settings.app_env != "production":
         logger.debug("DEV mock JP prices for '%s'", keyword)
@@ -1075,7 +1211,6 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         return _mock_jp_prices(keyword)
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        # Build scraper tasks – prefer official APIs when keys are configured
         tasks = []
         if settings.rakuten_app_id:
             tasks.append(_scrape_rakuten_api(client, keyword, settings.rakuten_app_id))
@@ -1092,9 +1227,15 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
         tasks += [
             _scrape_amazon_jp(client, keyword),
             _scrape_kakaku_jp(client, keyword),
-            _scrape_uniqlo_jp(client, keyword),
-            _scrape_gu_jp(client, keyword),
         ]
+        if "uniqlo" in brand_platforms:
+            tasks.append(_scrape_uniqlo_jp(client, keyword))
+        if "gu" in brand_platforms:
+            tasks.append(_scrape_gu_jp(client, keyword))
+        if "nike" in brand_platforms:
+            tasks.append(_scrape_nike_jp(client, keyword))
+        if "adidas" in brand_platforms:
+            tasks.append(_scrape_adidas_jp(client, keyword))
         results_per_source = await asyncio.gather(*tasks)
 
     combined = [r for src in results_per_source for r in src]
@@ -1103,14 +1244,10 @@ async def fetch_jp_prices(keyword: str) -> list[PriceListing]:
             listing.data_source = "scraped"
     await asyncio.sleep(settings.scraper_request_delay)
 
-    if not combined:
-        logger.warning("All JP scrapers returned 0 results for '%s'; falling back to Gemini", keyword)
-        combined = await _fallback_prices_via_gemini(keyword, "JP")
-    else:
-        combined = _filter_relevant(combined, keyword)
-        combined = _dedup_cheapest_per_platform(combined)
-        combined = _filter_outliers(combined, min_ratio=0.30)
-        combined.sort(key=lambda l: l.price)
+    combined = _filter_relevant(combined, keyword)
+    combined = _dedup_cheapest_per_platform(combined)
+    combined = _filter_outliers(combined, min_ratio=0.30)
+    combined.sort(key=lambda l: l.price)
 
     logger.info("JP total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
     return combined
