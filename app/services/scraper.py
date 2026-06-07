@@ -1160,6 +1160,7 @@ async def fetch_tw_prices(keyword: str, brand_platforms: list[str] | None = None
         return _mock_tw_prices(keyword)
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
+        scraper_labels = ["PChome", "momo", "蝦皮", "Yahoo TW", "露天拍賣"]
         tasks = [
             _scrape_pchome(client, keyword),
             _scrape_momo(client, keyword),
@@ -1168,14 +1169,18 @@ async def fetch_tw_prices(keyword: str, brand_platforms: list[str] | None = None
             _scrape_ruten_tw(client, keyword),
         ]
         if "uniqlo" in brand_platforms:
-            tasks.append(_scrape_uniqlo_tw(client, keyword))
+            scraper_labels.append("UNIQLO TW"); tasks.append(_scrape_uniqlo_tw(client, keyword))
         if "gu" in brand_platforms:
-            tasks.append(_scrape_gu_tw(client, keyword))
+            scraper_labels.append("GU TW"); tasks.append(_scrape_gu_tw(client, keyword))
         if "nike" in brand_platforms:
-            tasks.append(_scrape_nike_tw(client, keyword))
+            scraper_labels.append("Nike TW"); tasks.append(_scrape_nike_tw(client, keyword))
         if "adidas" in brand_platforms:
-            tasks.append(_scrape_adidas_tw(client, keyword))
+            scraper_labels.append("Adidas TW"); tasks.append(_scrape_adidas_tw(client, keyword))
+        logger.info("→→ TW scrapers (%d): %s", len(tasks), scraper_labels)
+        t_all = time.perf_counter()
         results_per_source = await asyncio.gather(*tasks)
+        per_source_counts = {scraper_labels[i]: len(results_per_source[i]) for i in range(len(results_per_source))}
+        logger.info("←← TW scrapers %.2fs — raw hits: %s", time.perf_counter() - t_all, per_source_counts)
 
     combined = [r for src in results_per_source for r in src]
     for listing in combined:
@@ -1188,7 +1193,14 @@ async def fetch_tw_prices(keyword: str, brand_platforms: list[str] | None = None
     combined = _filter_outliers(combined, min_ratio=0.30)
     combined.sort(key=lambda l: l.price)
 
-    logger.info("TW total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
+    if combined:
+        logger.info(
+            "TW final: %d listings for '%s' | platforms=%s | range=%.0f~%.0f TWD",
+            len(combined), keyword, [l.platform for l in combined],
+            combined[0].price, combined[-1].price,
+        )
+    else:
+        logger.warning("TW final: 0 listings for '%s' (all scrapers empty after filters)", keyword)
     return combined
 
 
@@ -1212,31 +1224,35 @@ async def fetch_jp_prices(keyword: str, brand_platforms: list[str] | None = None
 
     async with httpx.AsyncClient(follow_redirects=True) as client:
         tasks = []
+        scraper_labels = []
         if settings.rakuten_app_id:
-            tasks.append(_scrape_rakuten_api(client, keyword, settings.rakuten_app_id))
-            logger.debug("Using Rakuten API for '%s'", keyword)
+            scraper_labels.append("楽天API"); tasks.append(_scrape_rakuten_api(client, keyword, settings.rakuten_app_id))
         else:
-            tasks.append(_scrape_rakuten_jp(client, keyword))
+            scraper_labels.append("楽天HTML"); tasks.append(_scrape_rakuten_jp(client, keyword))
 
         if settings.yahoo_jp_app_id:
-            tasks.append(_scrape_yahoo_shopping_jp_api(client, keyword, settings.yahoo_jp_app_id))
-            logger.debug("Using Yahoo Shopping API for '%s'", keyword)
+            scraper_labels.append("Yahoo JP API"); tasks.append(_scrape_yahoo_shopping_jp_api(client, keyword, settings.yahoo_jp_app_id))
         else:
-            tasks.append(_scrape_yahoo_shopping_jp(client, keyword))
+            scraper_labels.append("Yahoo JP HTML"); tasks.append(_scrape_yahoo_shopping_jp(client, keyword))
 
+        scraper_labels += ["Amazon JP", "Kakaku"]
         tasks += [
             _scrape_amazon_jp(client, keyword),
             _scrape_kakaku_jp(client, keyword),
         ]
         if "uniqlo" in brand_platforms:
-            tasks.append(_scrape_uniqlo_jp(client, keyword))
+            scraper_labels.append("UNIQLO JP"); tasks.append(_scrape_uniqlo_jp(client, keyword))
         if "gu" in brand_platforms:
-            tasks.append(_scrape_gu_jp(client, keyword))
+            scraper_labels.append("GU JP"); tasks.append(_scrape_gu_jp(client, keyword))
         if "nike" in brand_platforms:
-            tasks.append(_scrape_nike_jp(client, keyword))
+            scraper_labels.append("Nike JP"); tasks.append(_scrape_nike_jp(client, keyword))
         if "adidas" in brand_platforms:
-            tasks.append(_scrape_adidas_jp(client, keyword))
+            scraper_labels.append("Adidas JP"); tasks.append(_scrape_adidas_jp(client, keyword))
+        logger.info("→→ JP scrapers (%d): %s", len(tasks), scraper_labels)
+        t_all = time.perf_counter()
         results_per_source = await asyncio.gather(*tasks)
+        per_source_counts = {scraper_labels[i]: len(results_per_source[i]) for i in range(len(results_per_source))}
+        logger.info("←← JP scrapers %.2fs — raw hits: %s", time.perf_counter() - t_all, per_source_counts)
 
     combined = [r for src in results_per_source for r in src]
     for listing in combined:
@@ -1249,7 +1265,14 @@ async def fetch_jp_prices(keyword: str, brand_platforms: list[str] | None = None
     combined = _filter_outliers(combined, min_ratio=0.30)
     combined.sort(key=lambda l: l.price)
 
-    logger.info("JP total: %d listings for '%s' (cheapest=%.0f)", len(combined), keyword, combined[0].price if combined else 0)
+    if combined:
+        logger.info(
+            "JP final: %d listings for '%s' | platforms=%s | range=%.0f~%.0f JPY",
+            len(combined), keyword, [l.platform for l in combined],
+            combined[0].price, combined[-1].price,
+        )
+    else:
+        logger.warning("JP final: 0 listings for '%s' (all scrapers empty after filters)", keyword)
     return combined
 
 

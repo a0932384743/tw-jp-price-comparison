@@ -164,6 +164,7 @@ async def search(
     input_label = f"image:{image.filename}" if image else f"text:{query!r}"
     logger.info("▶ Search start — %s", input_label)
     pipeline_start = time.perf_counter()
+    cpu_start = time.process_time()
 
     # ── Step 1: AI keyword mapping ──────────────────────────────────────────
     t0 = time.perf_counter()
@@ -184,11 +185,12 @@ async def search(
     except RuntimeError as e:
         raise HTTPException(status_code=429, detail=str(e))
     logger.info(
-        "  [1/4] AI keyword mapping      %.2fs → TW=%s | JP=%s | category=%s",
+        "  [1/4] AI keyword mapping      %.2fs → TW=%s | JP=%s | category=%s | brands=%s",
         time.perf_counter() - t0,
         mapping.refined_tw_keyword,
         mapping.refined_jp_keyword,
         mapping.category,
+        mapping.brand_platforms or [],
     )
 
     # ── Step 2: Live exchange rate + price fetching (with Firestore cache) ──
@@ -213,17 +215,25 @@ async def search(
                 len(tw_prices), len(jp_prices), live_rate,
             )
         else:
+            logger.info("  [2/4] Scraping — brands=%s | TW_kw=%s | JP_kw=%s",
+                        brand_platforms, mapping.refined_tw_keyword, mapping.refined_jp_keyword)
             tw_prices, jp_prices, product_image_url = await asyncio.gather(
                 fetch_tw_prices(mapping.refined_tw_keyword, brand_platforms=brand_platforms),
                 fetch_jp_prices(mapping.refined_jp_keyword, brand_platforms=brand_platforms),
                 fetch_product_thumbnail(mapping.refined_tw_keyword),
             )
+            tw_plat = [l.platform for l in tw_prices]
+            jp_plat = [l.platform for l in jp_prices]
+            tw_range = (f"{min(l.price for l in tw_prices):.0f}~{max(l.price for l in tw_prices):.0f} TWD"
+                        if tw_prices else "none")
+            jp_range = (f"{min(l.price for l in jp_prices):.0f}~{max(l.price for l in jp_prices):.0f} JPY"
+                        if jp_prices else "none")
             logger.info(
-                "  [2/4] Price fetch (live scrape)         %.2fs → TW=%d | JP=%d | rate=%.4f | img=%s",
-                time.perf_counter() - t0,
-                len(tw_prices), len(jp_prices), live_rate,
-                "✓" if product_image_url else "✗",
+                "  [2/4] Price fetch (live scrape)         %.2fs → rate=%.4f | img=%s",
+                time.perf_counter() - t0, live_rate, "✓" if product_image_url else "✗",
             )
+            logger.info("        TW (%d): %s | %s", len(tw_prices), tw_plat, tw_range)
+            logger.info("        JP (%d): %s | %s", len(jp_prices), jp_plat, jp_range)
 
         # If the dedicated thumbnail fetch came up empty, reuse the best API listing image.
         if not product_image_url:
@@ -285,9 +295,17 @@ async def search(
         )
 
     total = time.perf_counter() - pipeline_start
+    cpu_elapsed = time.process_time() - cpu_start
     logger.info(
-        "◀ Search done  %.2fs — TW=%d listings | JP=%d listings | deal=%s",
-        total, len(tw_prices), len(jp_prices), advice.best_deal_location,
+        "  result: deal=%s | TW_avg=%.0f TWD | JP_avg=%.0f TWD | JP_taxfree=%.0f TWD",
+        advice.best_deal_location,
+        advice.tw_average_price_twd or 0,
+        advice.jp_average_price_twd or 0,
+        advice.jp_tax_free_price_twd or 0,
+    )
+    logger.info(
+        "◀ Search done  wall=%.2fs  CPU=%.2fs — TW=%d | JP=%d | deal=%s",
+        total, cpu_elapsed, len(tw_prices), len(jp_prices), advice.best_deal_location,
     )
 
     return SearchResponse(
