@@ -114,7 +114,10 @@ async def analyze_input(
             data = data.encode("utf-8")
         import io
         import PIL.Image
+        _MAX_DIM = 1024
         image = PIL.Image.open(io.BytesIO(data))
+        if max(image.width, image.height) > _MAX_DIM:
+            image.thumbnail((_MAX_DIM, _MAX_DIM), PIL.Image.LANCZOS)
         contents = [f"{_SYSTEM_PROMPT}\n\nPlease identify this product and return the JSON.", image]
     else:
         raise ValueError(f"Unsupported input_type '{input_type}'. Use 'text' or 'image'.")
