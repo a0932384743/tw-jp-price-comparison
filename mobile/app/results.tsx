@@ -15,7 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { getLastResult } from '../lib/store';
 import { getPriceHistory } from '../lib/api';
-import { isFavorite, toggleFavorite } from '../lib/favorites';
+import { isFavorite, loadFavorites, toggleFavorite } from '../lib/favorites';
 import PlatformCard from '../components/PlatformCard';
 import AdviceCard from '../components/AdviceCard';
 import { Colors } from '../constants/colors';
@@ -171,19 +171,35 @@ function PriceHistoryChart({ keyword, market }: { keyword: string; market: 'TW' 
 export default function ResultsScreen() {
   const router = useRouter();
   const [data] = useState<SearchResponse | null>(() => getLastResult());
-  const [favorited, setFavorited] = useState(() =>
-    data ? isFavorite(data.keyword_mapping.refined_tw_keyword) : false
-  );
+  const [favorited, setFavorited] = useState(false);
 
   useEffect(() => {
     if (!data) { router.replace('/'); }
   }, [data, router]);
 
-  const handleToggleFavorite = () => {
+  useEffect(() => {
+    if (data) {
+      loadFavorites().then(() =>
+        setFavorited(isFavorite(data.keyword_mapping.refined_tw_keyword))
+      );
+    }
+  }, [data]);
+
+  const handleToggleFavorite = async () => {
     if (!data) return;
-    const nowFav = toggleFavorite(
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const twMin = data.tw_listings.length > 0 ? Math.min(...data.tw_listings.map(l => l.price)) : undefined;
+    const jpMin = data.jp_listings.length > 0 ? Math.min(...data.jp_listings.map(l => l.price)) : undefined;
+    const jpMinTwd = jpMin != null ? Math.round(jpMin * data.exchange_rate_jpy_twd) : undefined;
+    const nowFav = await toggleFavorite(
       data.keyword_mapping.refined_tw_keyword,
       data.keyword_mapping.category,
+      {
+        image_url: data.product_image_url ?? undefined,
+        tw_min: twMin,
+        jp_min_twd: jpMinTwd,
+        best_deal: data.advice.best_deal_location as 'Taiwan' | 'Japan' | 'Similar',
+      }
     );
     setFavorited(nowFav);
   };

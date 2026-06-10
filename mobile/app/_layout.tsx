@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Share, TouchableOpacity } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { getLastResult } from '../lib/store';
+import { loadFavorites } from '../lib/favorites';
+import { loadHistory } from '../lib/history';
 
 function ShareButton() {
   const handleShare = async () => {
@@ -40,6 +42,11 @@ function ShareButton() {
 }
 
 export default function RootLayout() {
+  useEffect(() => {
+    loadFavorites();
+    loadHistory();
+  }, []);
+
   return (
     <>
       <StatusBar style="light" />

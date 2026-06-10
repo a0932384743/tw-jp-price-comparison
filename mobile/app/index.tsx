@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -20,8 +20,8 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { searchByImage, searchByText } from '../lib/api';
 import { setLastResult } from '../lib/store';
-import { addToHistory, clearHistory, getHistory, type HistoryItem } from '../lib/history';
-import { getFavorites, removeFavorite, type FavoriteItem } from '../lib/favorites';
+import { addToHistory, clearHistory, getHistory, loadHistory, type HistoryItem } from '../lib/history';
+import { getFavorites, loadFavorites, removeFavorite, type FavoriteItem } from '../lib/favorites';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { Colors } from '../constants/colors';
 import { hapticImpact, hapticNotification, hapticSelection } from '../lib/haptics';
@@ -46,11 +46,16 @@ export default function SearchScreen() {
   const [loading, setLoading]       = useState(false);
   const [coldStart, setColdStart]   = useState(false);
   const [error, setError]           = useState<string | null>(null);
-  const [history, setHistory]       = useState<HistoryItem[]>(() => getHistory());
-  const [favorites, setFavorites]   = useState<FavoriteItem[]>(() => getFavorites());
+  const [history, setHistory]       = useState<HistoryItem[]>([]);
+  const [favorites, setFavorites]   = useState<FavoriteItem[]>([]);
   const [scanned, setScanned]       = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const coldStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    loadHistory().then(items => setHistory(items));
+    loadFavorites().then(items => setFavorites(items));
+  }, []);
 
   const refreshHistory = useCallback(() => setHistory(getHistory()), []);
   const refreshFavorites = useCallback(() => setFavorites(getFavorites()), []);
@@ -79,7 +84,16 @@ export default function SearchScreen() {
     runSearch(async () => {
       hapticImpact(Haptics.ImpactFeedbackStyle.Medium);
       const result = await searchByText(searchQuery);
-      addToHistory(searchQuery, result.keyword_mapping?.category);
+      const twMin = result.tw_listings.length > 0 ? Math.min(...result.tw_listings.map(l => l.price)) : undefined;
+      const jpMin = result.jp_listings.length > 0 ? Math.min(...result.jp_listings.map(l => l.price)) : undefined;
+      const jpMinTwd = jpMin != null ? Math.round(jpMin * result.exchange_rate_jpy_twd) : undefined;
+      await addToHistory(searchQuery, {
+        keyword: result.keyword_mapping?.refined_tw_keyword,
+        category: result.keyword_mapping?.category,
+        tw_min: twMin,
+        jp_min_twd: jpMinTwd,
+        best_deal: result.advice.best_deal_location as 'Taiwan' | 'Japan' | 'Similar',
+      });
       refreshHistory();
       setLastResult(result);
       router.push('/results');
@@ -140,15 +154,15 @@ export default function SearchScreen() {
     handleTextSearch(data);
   };
 
-  const handleClearHistory = () => {
+  const handleClearHistory = async () => {
     hapticSelection();
-    clearHistory();
+    await clearHistory();
     refreshHistory();
   };
 
-  const handleRemoveFavorite = (keyword: string) => {
+  const handleRemoveFavorite = async (keyword: string) => {
     hapticSelection();
-    removeFavorite(keyword);
+    await removeFavorite(keyword);
     refreshFavorites();
   };
 
@@ -353,6 +367,13 @@ export default function SearchScreen() {
                 <View style={s.historyContent}>
                   <Text style={s.historyQuery} numberOfLines={1}>{item.keyword}</Text>
                   {item.category && <Text style={s.historyCategory}>{item.category}</Text>}
+                  {(item.tw_min || item.jp_min_twd) && (
+                    <Text style={s.historyPrice}>
+                      {item.tw_min ? `🇹🇼 NT$${Math.round(item.tw_min).toLocaleString()}` : ''}
+                      {item.tw_min && item.jp_min_twd ? '  ' : ''}
+                      {item.jp_min_twd ? `🇯🇵 NT$${Math.round(item.jp_min_twd).toLocaleString()}` : ''}
+                    </Text>
+                  )}
                 </View>
                 <TouchableOpacity
                   onPress={() => handleRemoveFavorite(item.keyword)}
@@ -385,6 +406,13 @@ export default function SearchScreen() {
                 <View style={s.historyContent}>
                   <Text style={s.historyQuery} numberOfLines={1}>{item.query}</Text>
                   {item.category && <Text style={s.historyCategory}>{item.category}</Text>}
+                  {(item.tw_min || item.jp_min_twd) && (
+                    <Text style={s.historyPrice}>
+                      {item.tw_min ? `🇹🇼 NT$${Math.round(item.tw_min).toLocaleString()}` : ''}
+                      {item.tw_min && item.jp_min_twd ? '  ' : ''}
+                      {item.jp_min_twd ? `🇯🇵 NT$${Math.round(item.jp_min_twd).toLocaleString()}` : ''}
+                    </Text>
+                  )}
                 </View>
                 <Ionicons name="chevron-forward" size={16} color={Colors.border} />
               </TouchableOpacity>
@@ -529,6 +557,7 @@ const s = StyleSheet.create({
   historyContent: { flex: 1 },
   historyQuery:   { fontSize: 14, color: Colors.text, fontWeight: '500' },
   historyCategory:{ fontSize: 11, color: Colors.textTertiary, marginTop: 1 },
+  historyPrice:   { fontSize: 11, color: Colors.textTertiary, marginTop: 1 },
 
   /* tips */
   tipsCard:  { marginHorizontal: 16, marginTop: 4, backgroundColor: Colors.card, borderRadius: 12, padding: 16, gap: 10, shadowColor: Colors.shadow, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 1, shadowRadius: 4, elevation: 2 },
