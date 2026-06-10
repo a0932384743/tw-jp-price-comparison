@@ -41,6 +41,33 @@ _UA = (
 _HEADERS_TW = {"User-Agent": _UA, "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8"}
 _HEADERS_JP = {"User-Agent": _UA, "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"}
 
+# ── Price string parser ──────────────────────────────────────────────────────
+
+def _parse_price(price_str: str) -> float | None:
+    """Parse a price string to float, correctly handling thousands separators and decimals.
+
+    Examples:
+      "$2,781.00"  → 2781.0   (NOT 278100 — comma is thousands sep, dot is decimal)
+      "NT$35,900"  → 35900.0
+      "¥37,800"    → 37800.0
+      "2781"       → 2781.0
+    """
+    clean = re.sub(r"[^\d.,]", "", price_str.strip())
+    if not clean:
+        return None
+    if "." in clean:
+        # Treat last period as decimal separator; commas are thousands separators
+        integer_part, decimal_part = clean.rsplit(".", 1)
+        clean = f"{integer_part.replace(',', '')}.{decimal_part}"
+    else:
+        clean = clean.replace(",", "")
+    try:
+        v = float(clean)
+        return v if v >= 1 else None
+    except ValueError:
+        return None
+
+
 # ── Price outlier filter ─────────────────────────────────────────────────────
 
 def _filter_outliers(listings: list[PriceListing], min_ratio: float = 0.40) -> list[PriceListing]:
@@ -1065,12 +1092,8 @@ async def _scrape_serpapi_tw(client: httpx.AsyncClient, keyword: str, api_key: s
         results: list[PriceListing] = []
         for item in resp.json().get("shopping_results", [])[:10]:
             title = (item.get("title") or "").strip()
-            price_str = item.get("price") or ""
-            price_digits = re.sub(r"[^\d]", "", price_str)
-            if not title or not price_digits:
-                continue
-            price = float(price_digits)
-            if price < 10:
+            price = _parse_price(item.get("price") or "")
+            if not title or price is None:
                 continue
             source = item.get("source") or "Google Shopping"
             link = (item.get("link") or item.get("product_link")
@@ -1114,12 +1137,8 @@ async def _scrape_serpapi_jp(client: httpx.AsyncClient, keyword: str, api_key: s
         results: list[PriceListing] = []
         for item in resp.json().get("shopping_results", [])[:10]:
             title = (item.get("title") or "").strip()
-            price_str = item.get("price") or ""
-            price_digits = re.sub(r"[^\d]", "", price_str)
-            if not title or not price_digits:
-                continue
-            price = float(price_digits)
-            if price < 10:
+            price = _parse_price(item.get("price") or "")
+            if not title or price is None:
                 continue
             source = item.get("source") or "Google Shopping JP"
             link = (item.get("link") or item.get("product_link")
