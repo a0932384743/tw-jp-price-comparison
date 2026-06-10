@@ -83,6 +83,9 @@ async def _persist(
     def _write():
         db = get_db()
 
+        tw_prices_twd = [l.price for l in tw_prices if l.price > 0]
+        jp_prices_twd = [round(l.price * rate) for l in jp_prices if l.price > 0]
+
         # search_history document
         search_ref = db.collection("search_history").document()
         search_ref.set({
@@ -96,6 +99,14 @@ async def _persist(
             "exchange_rate_jpy_twd": rate,
             "best_deal_location": advice.best_deal_location,
             "verdict": advice.verdict,
+            # price summary
+            "tw_count": len(tw_prices),
+            "jp_count": len(jp_prices),
+            "tw_min_twd": min(tw_prices_twd) if tw_prices_twd else None,
+            "tw_avg_twd": round(sum(tw_prices_twd) / len(tw_prices_twd)) if tw_prices_twd else None,
+            "jp_min_twd": min(jp_prices_twd) if jp_prices_twd else None,
+            "jp_avg_twd": round(sum(jp_prices_twd) / len(jp_prices_twd)) if jp_prices_twd else None,
+            "jp_tax_free_twd": round(min(jp_prices_twd) * 0.9) if jp_prices_twd else None,
         })
 
         # price_cache – only write if we fetched fresh data
