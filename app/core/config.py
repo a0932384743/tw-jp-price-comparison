@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # Optional: Rakuten Ichiba API (free – register at https://webservice.rakuten.co.jp/)
     rakuten_app_id: str = ""
 
+    # Optional: Rakuten Affiliate ID for commission tracking on product links
+    rakuten_affiliate_id: str = ""
+
     # Optional: Yahoo Shopping JP API (free – register at https://developer.yahoo.co.jp/)
     yahoo_jp_app_id: str = ""
 

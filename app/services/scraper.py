@@ -1144,17 +1144,20 @@ async def _scrape_serpapi_jp(client: httpx.AsyncClient, keyword: str, api_key: s
 
 # ── Japan official APIs (free, require registration) ────────────────────────
 
-async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: str) -> list[PriceListing]:
+async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: str, affiliate_id: str = "") -> list[PriceListing]:
     """楽天市場 Ichiba Item Search API v2017 – returns reliable product images.
 
     Free API: register at https://webservice.rakuten.co.jp/ → set RAKUTEN_APP_ID.
+    Set RAKUTEN_AFFILIATE_ID to append affiliate tracking to product URLs.
     Returns mediumImageUrls (128×128 Rakuten CDN) for each item.
     """
-    url = (
-        "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706"
+    params = (
         f"?applicationId={app_id}&keyword={quote(keyword)}&hits=8"
         f"&sort=%2BitemPrice&format=json&availability=1"
     )
+    if affiliate_id:
+        params += f"&affiliateId={affiliate_id}"
+    url = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170706" + params
     try:
         t0 = time.perf_counter()
         logger.info("→ [Rakuten API] querying '%s'", keyword)
@@ -1166,7 +1169,8 @@ async def _scrape_rakuten_api(client: httpx.AsyncClient, keyword: str, app_id: s
             item = wrap.get("Item", wrap)
             name = item.get("itemName", "").strip()
             price = item.get("itemPrice", 0)
-            item_url = item.get("itemUrl", "")
+            # affiliateUrl is the tracked link when affiliateId is passed
+            item_url = item.get("affiliateUrl") or item.get("itemUrl", "")
 
             # mediumImageUrls is list[{"imageUrl": "..."}]; smallImageUrls same shape
             image_url: str | None = None
@@ -1338,7 +1342,8 @@ async def fetch_jp_prices(keyword: str, brand_platforms: list[str] | None = None
             tasks.append(_scrape_serpapi_jp(client, keyword, settings.serpapi_key))
         # Official free APIs (designed for server use, no IP blocking)
         if settings.rakuten_app_id:
-            scraper_labels.append("楽天API"); tasks.append(_scrape_rakuten_api(client, keyword, settings.rakuten_app_id))
+            scraper_labels.append("楽天API")
+            tasks.append(_scrape_rakuten_api(client, keyword, settings.rakuten_app_id, settings.rakuten_affiliate_id))
         else:
             scraper_labels.append("楽天HTML"); tasks.append(_scrape_rakuten_jp(client, keyword))
 
